@@ -11,6 +11,8 @@ AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 KWIN_SCRIPT_SOURCE="$PROJECT_DIR/kwin/textpik-cursor-bridge"
 KWIN_SCRIPT_DEST="$HOME/.local/share/kwin/scripts/textpik-cursor-bridge"
 
+MISSING=()
+
 info()  { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 ok()    { printf "\033[1;32m  OK\033[0m  %s\n" "$*"; }
 warn()  { printf "\033[1;33m WARN\033[0m  %s\n" "$*"; }
@@ -31,10 +33,10 @@ pkg_install() {
     [[ ${#pkgs[@]} -eq 0 ]] && return 0
     if $HAS_SUDO; then
         case "$PM" in
-            pacman) sudo pacman -S --needed --noconfirm "${pkgs[@]}" ;;
-            apt)    sudo apt install -y "${pkgs[@]}" ;;
-            dnf)    sudo dnf install -y "${pkgs[@]}" ;;
-            zypper) sudo zypper install -y "${pkgs[@]}" ;;
+            pacman) sudo pacman -S --needed --noconfirm "${pkgs[@]}" 2>/dev/null ;;
+            apt)    sudo apt install -y "${pkgs[@]}" 2>/dev/null ;;
+            dnf)    sudo dnf install -y "${pkgs[@]}" 2>/dev/null ;;
+            zypper) sudo zypper install -y "${pkgs[@]}" 2>/dev/null ;;
         esac
     else
         warn "Sin sudo. Instalacion manual:"
@@ -44,56 +46,115 @@ pkg_install() {
             dnf)    echo "  sudo dnf install ${pkgs[*]}" ;;
             zypper) echo "  sudo zypper install ${pkgs[*]}" ;;
         esac
+        return 1
+    fi
+}
+
+try_install() {
+    local desc="$1"; shift
+    if pkg_install "$@"; then
+        ok "$desc"
+    else
+        warn "$desc — no disponible, continuando sin ello"
+        MISSING+=("$desc")
     fi
 }
 
 install_pyside6() {
     if python3 -c "import PySide6" &>/dev/null; then return 0; fi
 
-    local pm_pkg=""
     case "$PM" in
-        pacman) pm_pkg="pyside6" ;;
-        dnf)    pm_pkg="python3-pyside6" ;;
-        zypper) pm_pkg="python3-pyside6" ;;
+        pacman) try_install "PySide6" pyside6 ;;
+        dnf)    try_install "PySide6" python3-pyside6 ;;
+        zypper) try_install "PySide6" python3-pyside6 ;;
         apt)
-            # Ubuntu 24.04+/Debian 13: paquete unico. Fallback: modulos separados
-            if pkg_install "python3-pyside6" && python3 -c "import PySide6" &>/dev/null; then
-                return 0
+            if pkg_install python3-pyside6 && python3 -c "import PySide6" &>/dev/null; then
+                ok "PySide6"; return 0
             fi
-            pm_pkg="python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets python3-pyside6.qtdbus"
+            if pkg_install python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets python3-pyside6.qtdbus \
+                && python3 -c "import PySide6" &>/dev/null; then
+                ok "PySide6 (modular)"; return 0
+            fi
+            warn "PySide6 no disponible via apt. Probando pip."
             ;;
+        *) warn "Gestor desconocido. Probando pip." ;;
     esac
 
-    if [[ -n "$pm_pkg" ]]; then
-        if pkg_install "$pm_pkg" && python3 -c "import PySide6" &>/dev/null; then
-            return 0
-        fi
-        warn "PySide6 no disponible via paquetes. Probando pip."
-    fi
+    if python3 -c "import PySide6" &>/dev/null; then return 0; fi
 
     info "Instalando PySide6 via pip..."
-    pip3 install --user PySide6 2>/dev/null || true
+    pip3 install --user PySide6 2>/dev/null || {
+        warn "PySide6 no se pudo instalar. Instalalo manualmente."
+        MISSING+=("PySide6 (pip)")
+    }
 }
 
-install_deps() {
-    local pkgs=()
+install_required_deps() {
+    # Paquetes esenciales: sin ellos la app no funciona
     case "$PM" in
-        pacman) pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
-        apt)    pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
-        dnf)    pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
-        zypper) pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
-        *)      warn "Gestor desconocido. Instala: wl-clipboard xdotool xdg-utils xclip xsel konsole" ;;
+        pacman) try_install "wl-clipboard" wl-clipboard
+                try_install "xdotool" xdotool
+                try_install "xdg-utils" xdg-utils ;;
+        apt)    try_install "wl-clipboard" wl-clipboard
+                try_install "xdotool" xdotool
+                try_install "xdg-utils" xdg-utils ;;
+        dnf)    try_install "wl-clipboard" wl-clipboard
+                try_install "xdotool" xdotool
+                try_install "xdg-utils" xdg-utils ;;
+        zypper) try_install "wl-clipboard" wl-clipboard
+                try_install "xdotool" xdotool
+                try_install "xdg-utils" xdg-utils ;;
+        *)      warn "Instala manualmente: wl-clipboard xdotool xdg-utils" ;;
     esac
-    [[ ${#pkgs[@]} -gt 0 ]] && pkg_install "${pkgs[@]}" || true
-    install_pyside6
+}
+
+install_optional_deps() {
+    # Paquetes opcionales: mejoran funcionalidad pero no bloquean
+    case "$PM" in
+        pacman)
+            try_install "xclip (X11)" xclip
+            try_install "xsel (X11 alt)" xsel
+            try_install "konsole" konsole
+            try_install "ydotool (Wayland)" ydotool 2>/dev/null || \
+                warn "ydotool no disponible (solo AUR). Paste en Wayland usara wtype como fallback."
+            ;;
+        apt)
+            try_install "xclip (X11)" xclip
+            try_install "xsel (X11 alt)" xsel
+            try_install "konsole" konsole
+            try_install "ydotool (Wayland)" ydotool 2>/dev/null || true
+            ;;
+        dnf)
+            try_install "xclip (X11)" xclip
+            try_install "xsel (X11 alt)" xsel
+            try_install "konsole" konsole
+            try_install "ydotool (Wayland)" ydotool 2>/dev/null || true
+            ;;
+        zypper)
+            try_install "xclip (X11)" xclip
+            try_install "xsel (X11 alt)" xsel
+            try_install "konsole" konsole
+            try_install "ydotool (Wayland)" ydotool 2>/dev/null || true
+            ;;
+    esac
 }
 
 install_binary() {
     mkdir -p "$BIN_DIR"
-    cat > "$BIN_PATH" << EOF
+    # Binario con auto-deteccion de ruta (sobrevive a mover la carpeta)
+    cat > "$BIN_PATH" << 'SCRIPT'
 #!/usr/bin/env bash
-exec python3 "$PROJECT_DIR/src/textpik.py" "\$@"
-EOF
+PROJECT_DIR="$(cd "$(dirname "$0")" && cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+# Si se instalo via packaging/install.sh, el proyecto esta en el padre de packaging/
+if [[ -f "$PROJECT_DIR/src/textpik.py" ]]; then
+    exec /usr/bin/python3 "$PROJECT_DIR/src/textpik.py" "$@"
+elif [[ -f "$PROJECT_DIR/../src/textpik.py" ]]; then
+    exec /usr/bin/python3 "$PROJECT_DIR/../src/textpik.py" "$@"
+else
+    echo "textpik: no se encontro src/textpik.py" >&2
+    exit 1
+fi
+SCRIPT
     chmod +x "$BIN_PATH"
     ok "Comando instalado: $BIN_PATH"
 }
@@ -136,28 +197,42 @@ install_kwin_bridge() {
     fi
     mkdir -p "$KWIN_SCRIPT_DEST"
     cp -a "$KWIN_SCRIPT_SOURCE/." "$KWIN_SCRIPT_DEST/"
-    ok "KWin bridge: $KWIN_SCRIPT_DEST"
+    ok "KWin bridge copiado"
 
-    # Intentar activar automaticamente via D-Bus
     if command -v qdbus &>/dev/null; then
-        qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \
+        if qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \
             "textpik-cursor-bridge" 2>/dev/null && \
-        qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.start 2>/dev/null && \
-        ok "KWin bridge activado automaticamente" || \
-        info "Activa el script manualmente: Preferencias del sistema > Administracion de ventanas > Scripts KWin > TextPik Cursor Bridge"
+           qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.start 2>/dev/null; then
+            ok "KWin bridge activado"
+        else
+            info "No se pudo activar automaticamente."
+            info "  Ve a: Preferencias del sistema > Administracion de ventanas"
+            info "  Scripts KWin > activa 'TextPik Cursor Bridge'"
+        fi
     else
-        info "Activa el script KWin manualmente en Preferencias del sistema"
+        info "qdbus no encontrado (instala qt6-tools)."
+        info "  Activa manualmente: Preferencias del sistema > Administracion de ventanas"
+        info "  Scripts KWin > activa 'TextPik Cursor Bridge'"
     fi
 }
 
 main() {
-    info "Instalando TextPik..."
+    info "Instalando TextPik para KDE Plasma..."
+
     chmod +x "$RUN_SCRIPT"
-    install_deps
+    install_required_deps
+    install_optional_deps
+    install_pyside6
     install_binary
     install_desktop_entry
     install_autostart
     install_kwin_bridge
+
+    echo ""
+    if [[ ${#MISSING[@]} -gt 0 ]]; then
+        warn "Paquetes no instalados: ${MISSING[*]}"
+        info "La app funciona igual, pero algunas acciones estaran limitadas."
+    fi
     ok "Instalacion completa."
     info "Ejecuta: textpik"
     info "O busca 'TextPik' en el menu de aplicaciones"
