@@ -2168,6 +2168,10 @@ class TextPikApp(QObject):
         if self._animating:
             return
         target = self.settings["popup_opacity"]
+        # QtWayland no soporta windowOpacity
+        if is_qt_wayland():
+            self._animating = False
+            return
         self.popup.setWindowOpacity(0.0)
         try:
             from PySide6.QtCore import QPropertyAnimation
