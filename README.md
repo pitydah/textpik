@@ -4,6 +4,9 @@ Popup action bar on text selection for **KDE Plasma 6** (Wayland & X11).
 
 Select text anywhere and a customizable action bar appears at your cursor —
 copy, search, translate, open links, and more with one click.
+<p align="center">
+  <img src="assets/logo.png" width="160" alt="TextPik logo">
+</p>
 
 ## Features
 
