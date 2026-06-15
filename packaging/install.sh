@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="TextPik"
+APP_NAME="textpik"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-DESKTOP_FILE="$SCRIPT_DIR/$APP_NAME.desktop"
 RUN_SCRIPT="$SCRIPT_DIR/run.sh"
-COMPILED_BINARY="$SCRIPT_DIR/textpik"
+BIN_DIR="$HOME/.local/bin"
+BIN_PATH="$BIN_DIR/$APP_NAME"
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 KWIN_SCRIPT_SOURCE="$PROJECT_DIR/kwin/textpik-cursor-bridge"
 KWIN_SCRIPT_DEST="$HOME/.local/share/kwin/scripts/textpik-cursor-bridge"
@@ -14,129 +14,82 @@ KWIN_SCRIPT_DEST="$HOME/.local/share/kwin/scripts/textpik-cursor-bridge"
 info()  { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 ok()    { printf "\033[1;32m  OK\033[0m  %s\n" "$*"; }
 warn()  { printf "\033[1;33m WARN\033[0m  %s\n" "$*"; }
-err()   { printf "\033[1;31mFAIL\033[0m  %s\n" "$*"; }
 
-detect_pkg_manager() {
+detect_pm() {
     for pm in pacman apt dnf zypper; do
-        if command -v "$pm" &>/dev/null; then
-            echo "$pm"
-            return 0
-        fi
+        if command -v "$pm" &>/dev/null; then echo "$pm"; return 0; fi
     done
-    echo "unknown"
-    return 1
+    echo "unknown"; return 1
 }
 
-PM=$(detect_pkg_manager)
-NEEDS_PKEXEC=false
-NEEDS_SUDO=false
-if command -v sudo &>/dev/null; then
-    NEEDS_SUDO=true
-elif command -v pkexec &>/dev/null; then
-    NEEDS_PKEXEC=true
-fi
+PM=$(detect_pm)
+HAS_SUDO=false
+command -v sudo &>/dev/null && HAS_SUDO=true
 
 pkg_install() {
-    local packages=("$@")
-    if [[ ${#packages[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    if $NEEDS_SUDO; then
+    local pkgs=("$@")
+    [[ ${#pkgs[@]} -eq 0 ]] && return 0
+    if $HAS_SUDO; then
         case "$PM" in
-            pacman) sudo pacman -S --needed --noconfirm "${packages[@]}" ;;
-            apt)    sudo apt install -y "${packages[@]}" ;;
-            dnf)    sudo dnf install -y "${packages[@]}" ;;
-            zypper) sudo zypper install -y "${packages[@]}" ;;
+            pacman) sudo pacman -S --needed --noconfirm "${pkgs[@]}" ;;
+            apt)    sudo apt install -y "${pkgs[@]}" ;;
+            dnf)    sudo dnf install -y "${pkgs[@]}" ;;
+            zypper) sudo zypper install -y "${pkgs[@]}" ;;
         esac
-    elif $NEEDS_PKEXEC; then
-        local cmd
-        case "$PM" in
-            pacman) cmd="pacman -S --needed --noconfirm" ;;
-            apt)    cmd="apt install -y" ;;
-            dnf)    cmd="dnf install -y" ;;
-            zypper) cmd="zypper install -y" ;;
-        esac
-        pkexec bash -c "$cmd ${packages[*]}"
     else
-        warn "No se tiene sudo ni pkexec. Instalacion manual requerida:"
+        warn "Sin sudo. Instalacion manual:"
         case "$PM" in
-            pacman) echo "  sudo pacman -S --needed ${packages[*]}" ;;
-            apt)    echo "  sudo apt install -y ${packages[*]}" ;;
-            dnf)    echo "  sudo dnf install -y ${packages[*]}" ;;
-            zypper) echo "  sudo zypper install -y ${packages[*]}" ;;
+            pacman) echo "  sudo pacman -S --needed ${pkgs[*]}" ;;
+            apt)    echo "  sudo apt install ${pkgs[*]}" ;;
+            dnf)    echo "  sudo dnf install ${pkgs[*]}" ;;
+            zypper) echo "  sudo zypper install ${pkgs[*]}" ;;
         esac
-        return 1
     fi
 }
 
 install_pyside6() {
-    if python3 -c "import PySide6" &>/dev/null; then
-        return 0
-    fi
+    if python3 -c "import PySide6" &>/dev/null; then return 0; fi
 
     local pm_pkg=""
-    local pip_pkg="PySide6"
-
     case "$PM" in
         pacman) pm_pkg="pyside6" ;;
-        apt)    pm_pkg="python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets" ;;
+        apt)    pm_pkg="python3-pyside6" ;;
         dnf)    pm_pkg="python3-pyside6" ;;
         zypper) pm_pkg="python3-pyside6" ;;
     esac
 
     if [[ -n "$pm_pkg" ]]; then
-        if pkg_install $pm_pkg && python3 -c "import PySide6" &>/dev/null; then
+        if pkg_install "$pm_pkg" && python3 -c "import PySide6" &>/dev/null; then
             return 0
         fi
-        warn "PySide6 no quedo disponible via paquetes del sistema; probando pip."
+        warn "PySide6 no disponible via paquetes. Probando pip."
     fi
 
     info "Instalando PySide6 via pip..."
-    if command -v pip3 &>/dev/null; then
-        if $NEEDS_SUDO; then
-            sudo pip3 install --break-system-packages "$pip_pkg" 2>/dev/null ||
-            sudo pip3 install "$pip_pkg"
-        elif $NEEDS_PKEXEC; then
-            pkexec pip3 install --break-system-packages "$pip_pkg" 2>/dev/null ||
-            pkexec pip3 install "$pip_pkg"
-        else
-            pip3 install --user "$pip_pkg"
-        fi
-    fi
+    pip3 install --user PySide6 2>/dev/null || true
 }
 
 install_deps() {
     local pkgs=()
-
     case "$PM" in
-        pacman)
-            pkgs=(wl-clipboard xdotool ydotool wtype konsole xdg-utils python-dbus)
-            ;;
-        apt)
-            pkgs=(wl-clipboard xdotool ydotool wtype konsole xdg-utils python3-dbus)
-            ;;
-        dnf)
-            pkgs=(wl-clipboard xdotool ydotool wtype konsole xdg-utils python3-dbus)
-            ;;
-        zypper)
-            pkgs=(wl-clipboard xdotool ydotool wtype konsole xdg-utils python3-dbus)
-            ;;
-        *)
-            warn "Gestor de paquetes no reconocido. Intentando con pip..."
-            pkgs=()
-            ;;
+        pacman) pkgs=(wl-clipboard xdotool xdg-utils) ;;
+        apt)    pkgs=(wl-clipboard xdotool xdg-utils) ;;
+        dnf)    pkgs=(wl-clipboard xdotool xdg-utils) ;;
+        zypper) pkgs=(wl-clipboard xdotool xdg-utils) ;;
+        *)      warn "Gestor desconocido. Instala manualmente: wl-clipboard xdotool xdg-utils" ;;
     esac
+    [[ ${#pkgs[@]} -gt 0 ]] && pkg_install "${pkgs[@]}"
+    install_pyside6
+}
 
-    if [[ -x "$COMPILED_BINARY" ]]; then
-        info "Ejecutable compilado detectado; se omite PySide6."
-    else
-        install_pyside6
-    fi
-
-    if [[ ${#pkgs[@]} -gt 0 ]]; then
-        pkg_install "${pkgs[@]}" || warn "Algunos paquetes no se instalaron."
-    fi
+install_binary() {
+    mkdir -p "$BIN_DIR"
+    cat > "$BIN_PATH" << EOF
+#!/usr/bin/env bash
+exec python3 "$PROJECT_DIR/src/textpik.py" "\$@"
+EOF
+    chmod +x "$BIN_PATH"
+    ok "Comando instalado: $BIN_PATH"
 }
 
 install_desktop_entry() {
@@ -145,60 +98,53 @@ install_desktop_entry() {
     cat > "$user_desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=textpik
-Comment=Barra emergente de acciones al seleccionar texto
-Exec=$RUN_SCRIPT
+Name=TextPik
+Comment=Popup action bar on text selection
+Exec=$BIN_PATH
 Icon=$PROJECT_DIR/assets/app/textpik.svg
 Terminal=false
 Categories=Utility;
 StartupNotify=false
 EOF
-    ok "Registrado $user_desktop"
+    ok "Desktop entry: $user_desktop"
 }
 
 install_autostart() {
     mkdir -p "$AUTOSTART_DIR"
-    local autostart_file="$AUTOSTART_DIR/$APP_NAME.desktop"
-    cat > "$autostart_file" << EOF
+    cat > "$AUTOSTART_DIR/$APP_NAME.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=textpik
-Comment=Barra emergente de acciones al seleccionar texto
-Exec=$RUN_SCRIPT
+Name=TextPik
+Exec=$BIN_PATH
 Terminal=false
 X-KDE-autostart-phase=2
 NoDisplay=true
 EOF
-    ok "Autostart creado en $autostart_file"
+    ok "Autostart: $AUTOSTART_DIR/$APP_NAME.desktop"
 }
 
 install_kwin_bridge() {
     if [[ ! -d "$KWIN_SCRIPT_SOURCE" ]]; then
-        warn "No se encuentra $KWIN_SCRIPT_SOURCE. Omitiendo puente KWin."
+        warn "Script KWin no encontrado en $KWIN_SCRIPT_SOURCE"
         return
     fi
-
     mkdir -p "$KWIN_SCRIPT_DEST"
     cp -a "$KWIN_SCRIPT_SOURCE/." "$KWIN_SCRIPT_DEST/"
-    ok "Puente KWin instalado en $KWIN_SCRIPT_DEST"
-    info "En Wayland puede requerir activar el script en KWin Scripts o reiniciar sesion."
-}
-
-make_executable() {
-    chmod +x "$RUN_SCRIPT"
-    ok "run.sh ejecutable"
+    ok "KWin bridge: $KWIN_SCRIPT_DEST"
+    info "Activalo en Preferencias del sistema > KWin Scripts"
 }
 
 main() {
-    info "Instalando $APP_NAME..."
-    make_executable
+    info "Instalando TextPik..."
+    chmod +x "$RUN_SCRIPT"
     install_deps
+    install_binary
     install_desktop_entry
     install_autostart
     install_kwin_bridge
-    ok "Instalacion completada."
-    info "Ejecuta: $RUN_SCRIPT"
-    info "O desde el menu de aplicaciones: $APP_NAME"
+    ok "Instalacion completa."
+    info "Ejecuta: textpik"
+    info "O busca 'TextPik' en el menu de aplicaciones"
 }
 
 main "$@"

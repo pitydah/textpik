@@ -1,29 +1,28 @@
 # TextPik
 
-Popup action bar on text selection for Linux (KDE Plasma).
+Popup action bar on text selection for **KDE Plasma 6** (Wayland & X11).
 
-Select any text and a customizable action bar appears at your cursor — copy,
-search, translate, open links, and more with one click.
+Select text anywhere and a customizable action bar appears at your cursor —
+copy, search, translate, open links, and more with one click.
 
 ## Features
 
 - 13 built-in actions: copy, paste, open URL, Google, YouTube, Maps,
   ChatGPT, DeepSeek, DuckDuckGo, terminal, print, translate, Ollama
-- KDE Plasma integration: Klipper, KWin cursor bridge, system tray
-- Wayland native support
+- KDE Plasma integration: Klipper D-Bus, KWin cursor bridge, system tray
+- Wayland native support via KWin
 - Click-outside-to-close
-- Configurable settings dialog with theme presets (Light, Dark, OLED)
+- Configurable settings with theme presets (Light, Dark, OLED)
 - Numeric shortcuts 1-9
-- Sticky popup mode
 - Spanish / English
 
 ## Requirements
 
+- **KDE Plasma 6** (Wayland or X11)
 - Python 3.10+
 - [PySide6](https://pypi.org/project/PySide6/)
 - `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11)
 - `xdotool`
-- KDE Plasma (recommended, for KWin integration)
 
 ## Installation
 
@@ -34,8 +33,14 @@ chmod +x packaging/install.sh
 ./packaging/install.sh
 ```
 
-This installs system dependencies, creates a `.desktop` entry, sets up
-autostart, and installs the KWin cursor bridge script.
+This installs system packages, creates the `textpik` command, a `.desktop`
+entry, autostart, and the KWin cursor bridge script.
+
+After installation, launch from the app menu or run:
+
+```bash
+textpik
+```
 
 ## Quick run (no install)
 
@@ -45,21 +50,44 @@ cd textpik
 python3 src/textpik.py
 ```
 
+## Wayland vs X11
+
+| Feature | Wayland | X11 |
+|---------|---------|-----|
+| Cursor position | KWin bridge script | xdotool (native) |
+| Click-outside | focus events + KWin | X11 pointer polling |
+| Clipboard | wl-clipboard | xclip / xsel |
+| Window opacity | Not supported | Fade-in animation |
+
+On Wayland, activate the KWin bridge script in **System Settings > KWin Scripts**.
+
+## Compatibility
+
+Supported and tested on KDE Plasma 6:
+
+| Distro | Status |
+|--------|--------|
+| Arch / CachyOS / Manjaro | Primary target |
+| Fedora KDE Spin | Supported |
+| KDE neon / Kubuntu 24.04+ | Supported |
+| Debian 13 KDE | Supported |
+| openSUSE Tumbleweed KDE | Supported |
+
+Non-KDE environments (GNOME, XFCE, Sway, Hyprland) are **not supported**.
+The app depends on KWin for cursor positioning and popup behavior.
+
 ## CLI mode
 
 ```bash
-python3 src/textpik.py run "Google" "search query"
-python3 src/textpik.py run "Copiar" "text to copy"
+textpik run "Google" "search query"
+textpik run "Copiar" "text to copy"
 ```
 
 ## Configuration
 
-Settings and actions are stored in `~/.config/textpik/`:
-
-- `settings.json` — appearance, behavior, language, blocked apps
-- `actions.json` — action list (editable via Settings dialog)
-
-Logs: `~/.cache/textpik/textpik.log`
+Settings: `~/.config/textpik/settings.json`
+Actions:  `~/.config/textpik/actions.json`
+Logs:     `~/.cache/textpik/textpik.log`
 
 ## License
 
