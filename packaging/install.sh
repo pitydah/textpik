@@ -147,9 +147,9 @@ install_binary() {
 PROJECT_DIR="$(cd "$(dirname "$0")" && cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 # Si se instalo via packaging/install.sh, el proyecto esta en el padre de packaging/
 if [[ -f "$PROJECT_DIR/src/textpik.py" ]]; then
-    exec /usr/bin/python3 "$PROJECT_DIR/src/textpik.py" "$@"
+    exec python3 "$PROJECT_DIR/src/textpik.py" "$@"
 elif [[ -f "$PROJECT_DIR/../src/textpik.py" ]]; then
-    exec /usr/bin/python3 "$PROJECT_DIR/../src/textpik.py" "$@"
+    exec python3 "$PROJECT_DIR/../src/textpik.py" "$@"
 else
     echo "textpik: no se encontro src/textpik.py" >&2
     exit 1
