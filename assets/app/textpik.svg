@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">ClipPop app icon</title>
+  <desc id="desc">Original vector icon showing selected text with a floating contextual action menu.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="90" y1="80" x2="925" y2="950" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0a72ff"/>
+      <stop offset="0.45" stop-color="#1726b6"/>
+      <stop offset="1" stop-color="#7717ff"/>
+    </linearGradient>
+
+    <radialGradient id="bgGlow" cx="30%" cy="18%" r="85%">
+      <stop offset="0" stop-color="#52efff" stop-opacity="0.25"/>
+      <stop offset="0.45" stop-color="#5374ff" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="lineDim" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a9c3ff" stop-opacity="0.68"/>
+      <stop offset="1" stop-color="#d7c8ff" stop-opacity="0.44"/>
+    </linearGradient>
+
+    <linearGradient id="selectedLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.65" stop-color="#e7faff"/>
+      <stop offset="1" stop-color="#b4f7ff"/>
+    </linearGradient>
+
+    <linearGradient id="cyan" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#65fbff"/>
+      <stop offset="1" stop-color="#21baff"/>
+    </linearGradient>
+
+    <linearGradient id="toolbar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3c3d49"/>
+      <stop offset="0.52" stop-color="#252631"/>
+      <stop offset="1" stop-color="#15161d"/>
+    </linearGradient>
+
+    <linearGradient id="button" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4b4d5c" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#292b36" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="iconStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#dff7ff"/>
+      <stop offset="1" stop-color="#a8b7ff"/>
+    </linearGradient>
+
+    <linearGradient id="spark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#c9a7ff"/>
+      <stop offset="1" stop-color="#7d5cff"/>
+    </linearGradient>
+
+    <clipPath id="roundedIcon">
+      <rect x="32" y="32" width="960" height="960" rx="156" ry="156"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#roundedIcon)">
+    <rect x="32" y="32" width="960" height="960" rx="156" ry="156" fill="url(#bg)"/>
+    <rect x="32" y="32" width="960" height="960" rx="156" ry="156" fill="url(#bgGlow)"/>
+
+    <!-- subtle diagonal depth shapes -->
+    <path d="M32 655 C256 530 385 410 508 32 H32 Z" fill="#ffffff" opacity="0.055"/>
+    <path d="M992 430 C805 545 663 672 548 992 H992 Z" fill="#000000" opacity="0.08"/>
+
+    <!-- background text lines -->
+    <rect x="196" y="172" width="506" height="44" rx="22" fill="url(#lineDim)" opacity="0.78"/>
+    <rect x="196" y="254" width="585" height="44" rx="22" fill="url(#lineDim)" opacity="0.60"/>
+    <rect x="196" y="501" width="584" height="44" rx="22" fill="url(#lineDim)" opacity="0.48"/>
+    <rect x="196" y="683" width="584" height="44" rx="22" fill="url(#lineDim)" opacity="0.55"/>
+    <rect x="196" y="766" width="475" height="44" rx="22" fill="url(#lineDim)" opacity="0.48"/>
+
+    <!-- selected text glow and shape -->
+    <rect x="167" y="573" width="704" height="88" rx="44" fill="#39e8ff" opacity="0.16"/>
+    <rect x="178" y="584" width="682" height="66" rx="33" fill="url(#selectedLine)"/>
+    <circle cx="168" cy="584" r="25" fill="#8ef8ff"/>
+    <rect x="160" y="607" width="16" height="78" rx="8" fill="#75efff"/>
+    <circle cx="851" cy="673" r="25" fill="#8ef8ff"/>
+    <path d="M834 559 H876" stroke="url(#cyan)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M834 665 H876" stroke="url(#cyan)" stroke-width="16" stroke-linecap="round"/>
+    <path d="M855 559 V665" stroke="url(#cyan)" stroke-width="16" stroke-linecap="round"/>
+
+    <!-- floating toolbar shadow -->
+    <rect x="136" y="348" width="752" height="150" rx="37" fill="#000000" opacity="0.20"/>
+    <rect x="126" y="338" width="772" height="170" rx="47" fill="#000000" opacity="0.10"/>
+    <path d="M486 496 L512 527 L538 496 Z" fill="#000000" opacity="0.16"/>
+
+    <!-- floating selection toolbar -->
+    <rect x="136" y="327" width="752" height="150" rx="37" fill="url(#toolbar)"/>
+    <path d="M486 475 L512 506 L538 475 Z" fill="#1a1b23"/>
+    <rect x="150" y="341" width="724" height="22" rx="11" fill="#ffffff" opacity="0.05"/>
+
+    <!-- action buttons -->
+    <rect x="174" y="354" width="112" height="96" rx="22" fill="url(#button)"/>
+    <rect x="320" y="354" width="112" height="96" rx="22" fill="url(#button)"/>
+    <rect x="466" y="354" width="112" height="96" rx="22" fill="url(#button)"/>
+    <rect x="612" y="354" width="112" height="96" rx="22" fill="url(#button)"/>
+    <rect x="758" y="354" width="112" height="96" rx="22" fill="url(#button)"/>
+
+    <!-- button highlights -->
+    <rect x="185" y="360" width="90" height="12" rx="6" fill="#ffffff" opacity="0.055"/>
+    <rect x="331" y="360" width="90" height="12" rx="6" fill="#ffffff" opacity="0.055"/>
+    <rect x="477" y="360" width="90" height="12" rx="6" fill="#ffffff" opacity="0.055"/>
+    <rect x="623" y="360" width="90" height="12" rx="6" fill="#ffffff" opacity="0.055"/>
+    <rect x="769" y="360" width="90" height="12" rx="6" fill="#ffffff" opacity="0.055"/>
+
+    <!-- copy icon -->
+    <g fill="none" stroke="url(#iconStroke)" stroke-width="8" stroke-linejoin="round">
+      <rect x="204" y="379" width="43" height="43" rx="5" opacity="0.95"/>
+      <rect x="225" y="398" width="43" height="43" rx="5" opacity="0.95"/>
+    </g>
+
+    <!-- search icon -->
+    <g fill="none" stroke="#edf7ff" stroke-width="8" stroke-linecap="round">
+      <circle cx="371" cy="395" r="26"/>
+      <path d="M391 415 L414 438"/>
+    </g>
+
+    <!-- sparkle/action icon -->
+    <g fill="url(#spark)">
+      <path d="M513 371 C522 395 527 400 551 409 C527 418 522 424 513 448 C504 424 498 418 474 409 C498 400 504 395 513 371 Z"/>
+      <path d="M537 354 C541 367 544 370 557 374 C544 378 541 381 537 394 C533 381 530 378 517 374 C530 370 533 367 537 354 Z" opacity="0.85"/>
+    </g>
+
+    <!-- share/action arrow -->
+    <g fill="none" stroke="#edf7ff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M642 423 C656 398 681 388 704 389"/>
+      <path d="M686 367 L711 390 L686 413"/>
+    </g>
+
+    <!-- generic translate/language icon -->
+    <g fill="none" stroke="url(#iconStroke)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M796 378 H836"/>
+      <path d="M816 368 V383"/>
+      <path d="M803 383 C810 399 824 414 842 421"/>
+      <path d="M834 383 C827 402 815 415 795 424"/>
+      <path d="M820 432 L841 390 L862 432"/>
+      <path d="M830 414 H852"/>
+    </g>
+  </g>
+</svg>

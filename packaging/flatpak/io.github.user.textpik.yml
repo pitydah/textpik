@@ -1,0 +1,36 @@
+{
+    "app-id": "io.github.<user>.textpik",
+    "runtime": "org.kde.Platform",
+    "runtime-version": "6.7",
+    "sdk": "org.kde.Sdk",
+    "command": "TextPik",
+    "finish-args": [
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--device=dri",
+        "--talk-name=org.kde.klipper",
+        "--talk-name=org.kde.kdeconnect",
+        "--talk-name=org.kde.ActivityManager",
+        "--talk-name=org.textpik.CursorBridge"
+    ],
+    "modules": [
+        {
+            "name": "TextPik",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm755 src/textpik.py /app/bin/textpik",
+                "install -Dm644 packaging/textpik.desktop /app/share/applications/io.github.<user>.textpik.desktop",
+                "install -Dm644 assets/app/textpik.svg /app/share/icons/hicolor/scalable/apps/textpik.svg",
+                "cp -r assets /app/share/textpik/",
+                "cp -r kwin /app/share/textpik/"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../.."
+                }
+            ]
+        }
+    ]
+}

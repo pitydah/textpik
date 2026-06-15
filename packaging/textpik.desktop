@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=TextPik
+Comment=Popup action bar on text selection
+Exec=textpik
+Icon=textpik
+Terminal=false
+Categories=Utility;
+StartupNotify=false
