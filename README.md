@@ -1,4 +1,7 @@
 # TextPik
+<p align="center">
+  <img src="assets/logo.png" width="160" alt="TextPik logo">
+</p>
 
 Popup action bar on text selection for Linux (KDE Plasma). Select any text
 and a customizable action bar appears at your cursor.
