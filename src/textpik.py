@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 """
 textpik - Barra emergente de acciones al seleccionar texto.
 

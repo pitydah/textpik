@@ -1,45 +1,65 @@
 # TextPik
-<p align="center">
-  <img src="assets/logo.png" width="160" alt="TextPik logo">
-</p>
 
-Popup action bar on text selection for Linux (KDE Plasma). Select any text
-and a customizable action bar appears at your cursor.
+Popup action bar on text selection for Linux (KDE Plasma).
+
+Select any text and a customizable action bar appears at your cursor — copy,
+search, translate, open links, and more with one click.
 
 ## Features
 
-- 13 built-in actions (copy, paste, open URL, search engines, AI, terminal, print)
-- KDE Plasma integration (Klipper, KWin cursor bridge)
+- 13 built-in actions: copy, paste, open URL, Google, YouTube, Maps,
+  ChatGPT, DeepSeek, DuckDuckGo, terminal, print, translate, Ollama
+- KDE Plasma integration: Klipper, KWin cursor bridge, system tray
 - Wayland native support
-- Configurable via `~/.config/textpik/settings.json`
-- System tray with pause/resume
+- Click-outside-to-close
+- Configurable settings dialog with theme presets (Light, Dark, OLED)
+- Numeric shortcuts 1-9
+- Sticky popup mode
+- Spanish / English
 
 ## Requirements
 
-- Python 3.10+ with PySide6
-- wl-clipboard (Wayland) or xclip/xsel (X11)
-- xdotool for cursor position
-- KDE Plasma (optional, for KWin integration)
+- Python 3.10+
+- [PySide6](https://pypi.org/project/PySide6/)
+- `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11)
+- `xdotool`
+- KDE Plasma (recommended, for KWin integration)
 
-## Quick Start
+## Installation
 
 ```bash
 git clone https://github.com/pitydah/textpik.git
 cd textpik
-/usr/bin/python3 src/textpik.py
+chmod +x packaging/install.sh
+./packaging/install.sh
 ```
 
-## CLI Mode
+This installs system dependencies, creates a `.desktop` entry, sets up
+autostart, and installs the KWin cursor bridge script.
+
+## Quick run (no install)
 
 ```bash
-/usr/bin/python3 src/textpik.py run "Copiar" "text to copy"
-/usr/bin/python3 src/textpik.py run "Google" "search query"
+git clone https://github.com/pitydah/textpik.git
+cd textpik
+python3 src/textpik.py
 ```
 
-## Settings
+## CLI mode
 
-Settings are stored at `~/.config/textpik/settings.json`. Edit manually or use
-the tray icon > Settings dialog.
+```bash
+python3 src/textpik.py run "Google" "search query"
+python3 src/textpik.py run "Copiar" "text to copy"
+```
+
+## Configuration
+
+Settings and actions are stored in `~/.config/textpik/`:
+
+- `settings.json` — appearance, behavior, language, blocked apps
+- `actions.json` — action list (editable via Settings dialog)
+
+Logs: `~/.cache/textpik/textpik.log`
 
 ## License
 
