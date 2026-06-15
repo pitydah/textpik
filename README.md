@@ -24,7 +24,7 @@ and a customizable action bar appears at your cursor.
 ## Quick Start
 
 ```bash
-git clone https://github.com/cristianczm/textpik.git
+git clone https://github.com/pitydah/textpik.git
 cd textpik
 /usr/bin/python3 src/textpik.py
 ```
