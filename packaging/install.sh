@@ -141,19 +141,9 @@ install_optional_deps() {
 
 install_binary() {
     mkdir -p "$BIN_DIR"
-    # Binario con auto-deteccion de ruta (sobrevive a mover la carpeta)
-    cat > "$BIN_PATH" << 'SCRIPT'
+    cat > "$BIN_PATH" << SCRIPT
 #!/usr/bin/env bash
-PROJECT_DIR="$(cd "$(dirname "$0")" && cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-# Si se instalo via packaging/install.sh, el proyecto esta en el padre de packaging/
-if [[ -f "$PROJECT_DIR/src/textpik.py" ]]; then
-    exec python3 "$PROJECT_DIR/src/textpik.py" "$@"
-elif [[ -f "$PROJECT_DIR/../src/textpik.py" ]]; then
-    exec python3 "$PROJECT_DIR/../src/textpik.py" "$@"
-else
-    echo "textpik: no se encontro src/textpik.py" >&2
-    exit 1
-fi
+exec python3 "$PROJECT_DIR/src/textpik.py" "\$@"
 SCRIPT
     chmod +x "$BIN_PATH"
     ok "Comando instalado: $BIN_PATH"
