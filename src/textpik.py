@@ -53,10 +53,11 @@ def install_python_or_system_package(python_module, pacman_package, pip_package)
         Falta {python_module}.
 
         Instala la dependencia y vuelve a ejecutar textpik:
-          sudo pacman -S --needed {pacman_package}
-
-        Alternativa con pip:
-          python -m pip install --user {pip_package}
+          pip: python3 -m pip install --user {pip_package}
+          Arch: sudo pacman -S --needed {pacman_package}
+          Debian/Ubuntu: sudo apt install python3-{pip_package.lower()}
+          Fedora: sudo dnf install python3-{pip_package.lower()}
+          openSUSE: sudo zypper install python3-{pip_package.lower()}
         """
     ).strip()
 
@@ -74,8 +75,15 @@ def install_python_or_system_package(python_module, pacman_package, pip_package)
     if answer not in ("s", "si", "y", "yes"):
         return False
 
+    # Detectar gestor de paquetes
     if check_command("pacman"):
         cmd = ["sudo", "pacman", "-S", "--needed", pacman_package]
+    elif check_command("apt"):
+        cmd = ["sudo", "apt", "install", "-y", f"python3-{pip_package.lower()}"]
+    elif check_command("dnf"):
+        cmd = ["sudo", "dnf", "install", "-y", f"python3-{pip_package.lower()}"]
+    elif check_command("zypper"):
+        cmd = ["sudo", "zypper", "install", "-y", f"python3-{pip_package.lower()}"]
     else:
         cmd = [sys.executable, "-m", "pip", "install", "--user", pip_package]
 
@@ -680,36 +688,39 @@ def offer_install_system_packages(packages, parent=None):
         "Sin ellas, algunas funciones como pegar automaticamente pueden no funcionar."
     )
 
-    if check_command("pkexec") and check_command("pacman"):
-        message += "\n\nDeseas instalarlas ahora con pkexec/pacman?"
-        answer = QMessageBox.question(
-            parent,
-            "Dependencias opcionales",
-            message,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        if answer != QMessageBox.Yes:
-            return False
+    if check_command("pkexec"):
+        # Detectar gestor de paquetes para instalar
+        if check_command("pacman"):
+            cmd = ["pkexec", "pacman", "-S", "--noconfirm", "--needed", *packages]
+        elif check_command("apt"):
+            cmd = ["pkexec", "apt", "install", "-y", *packages]
+        elif check_command("dnf"):
+            cmd = ["pkexec", "dnf", "install", "-y", *packages]
+        elif check_command("zypper"):
+            cmd = ["pkexec", "zypper", "install", "-y", *packages]
+        else:
+            cmd = None
 
-        cmd = ["pkexec", "pacman", "-S", "--noconfirm", "--needed", *packages]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-        except Exception as exc:
-            QMessageBox.warning(parent, "Aviso", f"No se pudo ejecutar pkexec: {exc}")
-            return False
-
-        if result.returncode != 0:
-            QMessageBox.warning(
-                parent,
-                "Aviso",
-                "No se pudieron instalar los paquetes:\n" + result.stderr.strip(),
-            )
-            return False
-        return True
+        if cmd:
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+            except Exception as exc:
+                QMessageBox.warning(parent, "Aviso", f"No se pudo ejecutar pkexec: {exc}")
+                return False
+            if result.returncode == 0:
+                return True
 
     message += "\n\nInstalacion manual sugerida:\n"
-    message += "sudo pacman -S --needed " + " ".join(packages)
+    if check_command("pacman"):
+        message += "sudo pacman -S --needed " + " ".join(packages)
+    elif check_command("apt"):
+        message += "sudo apt install " + " ".join(packages)
+    elif check_command("dnf"):
+        message += "sudo dnf install " + " ".join(packages)
+    elif check_command("zypper"):
+        message += "sudo zypper install " + " ".join(packages)
+    else:
+        message += "Instala los paquetes: " + " ".join(packages)
     QMessageBox.warning(parent, "Dependencias opcionales", message)
     return False
 

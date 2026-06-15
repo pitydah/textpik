@@ -53,9 +53,15 @@ install_pyside6() {
     local pm_pkg=""
     case "$PM" in
         pacman) pm_pkg="pyside6" ;;
-        apt)    pm_pkg="python3-pyside6" ;;
         dnf)    pm_pkg="python3-pyside6" ;;
         zypper) pm_pkg="python3-pyside6" ;;
+        apt)
+            # Ubuntu 24.04+/Debian 13: paquete unico. Fallback: modulos separados
+            if pkg_install "python3-pyside6" && python3 -c "import PySide6" &>/dev/null; then
+                return 0
+            fi
+            pm_pkg="python3-pyside6.qtcore python3-pyside6.qtgui python3-pyside6.qtwidgets python3-pyside6.qtdbus"
+            ;;
     esac
 
     if [[ -n "$pm_pkg" ]]; then
@@ -72,13 +78,13 @@ install_pyside6() {
 install_deps() {
     local pkgs=()
     case "$PM" in
-        pacman) pkgs=(wl-clipboard xdotool xdg-utils) ;;
-        apt)    pkgs=(wl-clipboard xdotool xdg-utils) ;;
-        dnf)    pkgs=(wl-clipboard xdotool xdg-utils) ;;
-        zypper) pkgs=(wl-clipboard xdotool xdg-utils) ;;
-        *)      warn "Gestor desconocido. Instala manualmente: wl-clipboard xdotool xdg-utils" ;;
+        pacman) pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
+        apt)    pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
+        dnf)    pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
+        zypper) pkgs=(wl-clipboard xdotool xdg-utils xclip xsel konsole ydotool) ;;
+        *)      warn "Gestor desconocido. Instala: wl-clipboard xdotool xdg-utils xclip xsel konsole" ;;
     esac
-    [[ ${#pkgs[@]} -gt 0 ]] && pkg_install "${pkgs[@]}"
+    [[ ${#pkgs[@]} -gt 0 ]] && pkg_install "${pkgs[@]}" || true
     install_pyside6
 }
 
@@ -131,7 +137,17 @@ install_kwin_bridge() {
     mkdir -p "$KWIN_SCRIPT_DEST"
     cp -a "$KWIN_SCRIPT_SOURCE/." "$KWIN_SCRIPT_DEST/"
     ok "KWin bridge: $KWIN_SCRIPT_DEST"
-    info "Activalo en Preferencias del sistema > KWin Scripts"
+
+    # Intentar activar automaticamente via D-Bus
+    if command -v qdbus &>/dev/null; then
+        qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \
+            "textpik-cursor-bridge" 2>/dev/null && \
+        qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.start 2>/dev/null && \
+        ok "KWin bridge activado automaticamente" || \
+        info "Activa el script manualmente: Preferencias del sistema > Administracion de ventanas > Scripts KWin > TextPik Cursor Bridge"
+    else
+        info "Activa el script KWin manualmente en Preferencias del sistema"
+    fi
 }
 
 main() {

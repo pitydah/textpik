@@ -62,7 +62,11 @@ python3 src/textpik.py
 | Clipboard | wl-clipboard | xclip / xsel |
 | Window opacity | Not supported | Fade-in animation |
 
-On Wayland, activate the KWin bridge script in **System Settings > KWin Scripts**.
+On Wayland, activate the KWin bridge after installation:
+
+**System Settings → Window Management → KWin Scripts → check "TextPik Cursor Bridge" → Apply**
+
+Without this, cursor positioning falls back to screen center.
 
 ## Compatibility
 
