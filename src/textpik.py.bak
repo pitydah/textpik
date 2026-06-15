@@ -923,8 +923,6 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
             self._start_wl_paste_primary_monitor()
         elif self.settings.get("enable_wayland_polling", True):
             self._poll_timer.start(500)
-        if not self._use_wl_paste and qt_dbus_available() and self._dbus_monitor is None:
-            self._start_klipper_signal_monitor()
 
     def _on_wl_paste_monitor_output(self):
         if self._wl_paste_monitor is None:
@@ -996,10 +994,12 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
                     text=True,
                     timeout=0.5,
                 )
-                if result.returncode == 0 and result.stdout.strip():
+                if result.returncode == 0:
                     return result.stdout.strip()
+                return ""
             except Exception as exc:
                 logger.warning("No se pudo leer PRIMARY con wl-paste: %s", exc)
+                return ""
 
         if self.clipboard.supportsSelection():
             text = self.clipboard.text(QClipboard.Mode.Selection).strip()
@@ -1466,7 +1466,7 @@ def run_cli_action(args):
             command = action["cmd"]
             break
 
-    if command in {"copy", "paste", "terminal", "print", "ollama"}:
+    if command in {"copy", "paste", "terminal"}:
         print(
             f"La accion '{command}' requiere la interfaz grafica de textpik.",
             file=sys.stderr,
@@ -2290,10 +2290,10 @@ class TextPikApp(QObject):
                     if values:
                         from PySide6.QtCore import QPoint as QtPoint
                         pos = values[0]
-                    if isinstance(pos, QtPoint) and self.cursor_bridge is not None:
-                        self.cursor_bridge.update_cursor(pos.x(), pos.y())
-                    elif isinstance(pos, (tuple, list)) and len(pos) >= 2 and self.cursor_bridge is not None:
-                        self.cursor_bridge.update_cursor(int(pos[0]), int(pos[1]))
+                        if isinstance(pos, QtPoint):
+                            self.cursor_bridge.update_cursor(pos.x(), pos.y())
+                        elif isinstance(pos, (tuple, list)) and len(pos) >= 2:
+                            self.cursor_bridge.update_cursor(int(pos[0]), int(pos[1]))
                         return
         except Exception:
             pass
