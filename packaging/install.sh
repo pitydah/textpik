@@ -24,7 +24,7 @@ detect_pm() {
     echo "unknown"; return 1
 }
 
-PM=$(detect_pm)
+PM=$(detect_pm) || { warn "No se detecto gestor de paquetes conocido. Instale las dependencias manualmente."; PM="none"; }
 HAS_SUDO=false
 command -v sudo &>/dev/null && HAS_SUDO=true
 

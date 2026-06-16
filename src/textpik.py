@@ -152,6 +152,10 @@ DEFAULT_SETTINGS = {
     "max_selection_length": 5000,
     "confirm_terminal_execution": True,
     "context_aware": True,
+    "sticky_popup": False,
+    "show_numeric_badges": False,
+    "enable_global_hotkey": False,
+    "app_language": "auto",
     "enable_wayland_polling": True,
     "log_enabled": True,
     "popup_background_color": "#f7f7f7",
@@ -175,10 +179,12 @@ DEFAULT_SETTINGS = {
         "dota",
         "minecraft",
         "retroarch",
-            "factorio",
+        "factorio",
     ],
     "blocked_apps_enabled": False,
     "blocked_apps": [],
+    "blocked_activities_enabled": False,
+    "blocked_activities": [],
     "theme_preset": "custom",
 }
 
@@ -448,7 +454,8 @@ def load_settings():
         try:
             with SETTINGS_FILE.open("r", encoding="utf-8") as file:
                 settings = normalize_settings(json.load(file))
-        except Exception:
+        except Exception as exc:
+            logger.debug("No se pudo cargar settings.json: %s", exc)
             settings = dict(DEFAULT_SETTINGS)
     else:
         settings = dict(DEFAULT_SETTINGS)
@@ -609,7 +616,8 @@ class ProcessFilter:
                 capture_output=True, text=True, timeout=0.4,
             )
             return result.stdout.strip().lower() if result.returncode == 0 else ""
-        except Exception:
+        except Exception as exc:
+            logger.debug("No se pudo obtener clase de ventana activa: %s", exc)
             return ""
 
     def is_foreground_process_blocked(self):
@@ -620,6 +628,31 @@ class ProcessFilter:
             return False
         wm_class = self._active_window_class()
         return bool(wm_class and any(b in wm_class for b in blocked))
+
+    def is_foreground_activity_blocked(self):
+        if not self.settings.get("blocked_activities_enabled", False):
+            return False
+        blocked = self.settings.get("blocked_activities", [])
+        if not blocked:
+            return False
+        try:
+            from PySide6.QtDBus import QDBusConnection, QDBusInterface
+            bus = QDBusConnection.sessionBus()
+            iface = QDBusInterface(
+                "org.kde.ActivityManager",
+                "/ActivityManager/Activities",
+                "org.kde.ActivityManager.Activities",
+                bus,
+            )
+            if iface.isValid():
+                reply = iface.call("CurrentActivity")
+                if reply.arguments():
+                    current_id = str(reply.arguments()[0])
+                    short_id = current_id.split("-")[0] if "-" in current_id else current_id
+                    return any(b in current_id or b in short_id for b in blocked)
+        except Exception as exc:
+            logger.debug("No se pudo consultar actividad: %s", exc)
+        return False
 
 
 def load_icon(path, fallback_theme=None):
@@ -1029,24 +1062,6 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
             logger.info("Klipper selectionChanged recibido")
             self._selection_event()
 
-    def _call_klipper(self, method, *args):
-        if self.iface is None or not self.iface.isValid():
-            return ""
-        try:
-            from PySide6.QtDBus import QDBusMessage
-
-            reply = self.iface.call(method, *args)
-            if reply.type() == QDBusMessage.MessageType.ErrorMessage:
-                return ""
-            values = reply.arguments()
-        except Exception:
-            return ""
-        if not values:
-            return ""
-        if values[0] is None:
-            return ""
-        return str(values[0])
-
     def _read_selection_text(self):
         if self._use_wl_paste:
             try:
@@ -1165,7 +1180,8 @@ def get_cursor_pos_xdotool():
             text=True,
             timeout=0.2,
         )
-    except Exception:
+    except Exception as exc:
+        logger.debug("xdotool getmouselocation fallo: %s", exc)
         return None
     if result.returncode != 0:
         return None
@@ -1245,21 +1261,24 @@ class PopupWindow(QWidget):
         self.buttons_layout.setSpacing(spacing)
 
         self.setWindowOpacity(self.settings["popup_opacity"])
+        button_color = self.settings.get("popup_button_color", "transparent")
+        hover_color = self.settings.get("popup_hover_color", "rgba(0,0,0,28)")
+        border_color = self.settings.get("popup_button_border_color", "transparent")
         self.setStyleSheet(
             f"""
             QPushButton {{
-                background-color: transparent;
-                border: none;
+                background-color: {button_color};
+                border: 1px solid {border_color};
                 border-radius: {button_radius}px;
             }}
             QPushButton:hover {{
-                background-color: rgba(0, 0, 0, 28);
-                border: none;
+                background-color: {hover_color};
+                border: 1px solid {border_color};
                 border-radius: {button_radius}px;
             }}
             QPushButton:pressed {{
-                background-color: rgba(0, 0, 0, 45);
-                border: none;
+                background-color: {hover_color};
+                border: 1px solid {border_color};
             }}
             """
         )
@@ -1320,6 +1339,17 @@ class PopupWindow(QWidget):
             command = action["cmd"]
             button.clicked.connect(lambda checked=False, cmd=command: self._on_click(cmd))
             self.buttons_layout.addWidget(button)
+            if self.settings.get("show_numeric_badges", False):
+                badge = QLabel(str(i + 1), button)
+                badge.setStyleSheet(
+                    "background: rgba(0,0,0,40); color: #888; "
+                    "font-size: 8px; font-weight: bold; "
+                    "border-radius: 4px; padding: 0 3px;"
+                )
+                badge.adjustSize()
+                badge.move(1, 1)
+                badge.setAttribute(Qt.WA_TransparentForMouseEvents)
+                badge.show()
 
         self.buttons_layout.activate()
         self.adjustSize()
@@ -1347,11 +1377,16 @@ class PopupWindow(QWidget):
         super().focusOutEvent(event)
 
     def hide_if_focus_outside(self):
+        if self.settings.get("sticky_popup", False):
+            return
         focus_widget = QApplication.focusWidget()
         if focus_widget is self or (focus_widget is not None and self.isAncestorOf(focus_widget)):
             return
         logger.info("Popup perdio foco hacia fuera; ocultando")
         self.hide()
+
+    def is_sticky(self):
+        return bool(self.settings.get("sticky_popup", False))
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -1360,6 +1395,9 @@ class PopupWindow(QWidget):
             if idx < len(self.actions):
                 self._on_click(self.actions[idx]["cmd"])
                 return
+        if key == Qt.Key_Escape:
+            self.hide()
+            return
         super().keyPressEvent(event)
 
     def show_at_cursor(self):
@@ -2125,7 +2163,9 @@ class TextPikApp(QObject):
                 return
 
             bridge = CursorBridge()
-            bridge._on_click_outside = lambda: self.hide_popup()
+            bridge._on_click_outside = lambda: (
+                self.popup.is_sticky() or self.hide_popup()
+            )
             adaptor = create_cursor_bridge_adaptor(bridge)
             if not bus.registerObject(
                 CURSOR_BRIDGE_PATH,
@@ -2149,6 +2189,8 @@ class TextPikApp(QObject):
             logger.warning("No se pudo iniciar puente de cursor KWin: %s", exc)
 
     def setup_hotkey(self):
+        if not self.settings.get("enable_global_hotkey", False):
+            return
         try:
             import keyboard
 
@@ -2167,11 +2209,15 @@ class TextPikApp(QObject):
             self.show_popup(force=True)
 
     def on_application_state_changed(self, state):
+        if self.popup.is_sticky():
+            return
         if state != Qt.ApplicationActive:
             self.hide_popup()
 
     def on_focus_window_changed(self, focus_window):
         if not self.popup.isVisible():
+            return
+        if self.popup.is_sticky():
             return
         popup_window = self.popup.windowHandle()
         if focus_window is popup_window:
@@ -2205,6 +2251,9 @@ class TextPikApp(QObject):
         outside = not self.popup.rect().contains(local_pos)
 
         if buttons_pressed and outside:
+            if self.popup.is_sticky():
+                self._outside_count += 1
+                return
             logger.info("Click externo detectado; ocultando popup")
             self.hide_popup()
 
@@ -2261,7 +2310,8 @@ class TextPikApp(QObject):
             self._popup_animation.setEndValue(target)
             self._popup_animation.finished.connect(lambda: setattr(self, "_animating", False))
             self._popup_animation.start()
-        except Exception:
+        except Exception as exc:
+            logger.debug("Animacion del popup fallo: %s", exc)
             self.popup.setWindowOpacity(target)
             self._animating = False
 
@@ -2358,13 +2408,14 @@ class TextPikApp(QObject):
                     if values:
                         from PySide6.QtCore import QPoint as QtPoint
                         pos = values[0]
-                    if isinstance(pos, QtPoint) and self.cursor_bridge is not None:
-                        self.cursor_bridge.update_cursor(pos.x(), pos.y())
-                    elif isinstance(pos, (tuple, list)) and len(pos) >= 2 and self.cursor_bridge is not None:
-                        self.cursor_bridge.update_cursor(int(pos[0]), int(pos[1]))
-                        return
-        except Exception:
-            pass
+                        if isinstance(pos, QtPoint) and self.cursor_bridge is not None:
+                            self.cursor_bridge.update_cursor(pos.x(), pos.y())
+                            return
+                        if isinstance(pos, (tuple, list)) and len(pos) >= 2 and self.cursor_bridge is not None:
+                            self.cursor_bridge.update_cursor(int(pos[0]), int(pos[1]))
+                            return
+        except Exception as exc:
+            logger.debug("request_cursor_update fallo: %s", exc)
 
     def show_popup(self, force=False):
         if not force and not self.monitor._active:
@@ -2376,6 +2427,9 @@ class TextPikApp(QObject):
             return
         if not force and self.process_filter.is_foreground_process_blocked():
             logger.info("Popup omitido por filtro de aplicaciones")
+            return
+        if not force and self.process_filter.is_foreground_activity_blocked():
+            logger.info("Popup omitido por filtro de actividades")
             return
         text = self.monitor.get_last_text().strip()
         if text:
@@ -2609,13 +2663,13 @@ class TextPikApp(QObject):
         dialog.show()
 
     def _show_toast(self, msg):
-        if hasattr(self, "tray_icon") and self.tray_icon is not None:
+        if hasattr(self, "tray") and self.tray is not None:
             try:
-                self.tray_icon.showMessage(
+                self.tray.showMessage(
                     "TextPik", msg, QSystemTrayIcon.MessageIcon.Information, 2000
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Toast fallo: %s", exc)
 
     def _kdeconnect_send(self, text):
         QApplication.clipboard().setText(text)
@@ -2974,13 +3028,13 @@ exec bash -i
             try:
                 self.cursor_bridge_bus.unregisterObject(CURSOR_BRIDGE_PATH)
                 self.cursor_bridge_bus.unregisterService(CURSOR_BRIDGE_SERVICE)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error al desregistrar D-Bus: %s", exc)
         if getattr(self, "hotkey_active", False) and getattr(self, "keyboard", None):
             try:
                 self.keyboard.unhook_all_hotkeys()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Error al desregistrar hotkey: %s", exc)
 
     def run(self):
         sys.exit(self.app.exec())

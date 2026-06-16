@@ -1,28 +1,28 @@
-# Maintainer: selectxt contributors
-# Contributor: Your Name <your@email.com>
+# Maintainer: TextPik contributors
+# Contributor: pitydah <pitydah@github.com>
 
-pkgname=selectxt
-pkgver=0.11.0
+pkgname=textpik
+pkgver=0.3.0
 pkgrel=1
-pkgdesc="Popup action bar on text selection for Linux (KDE Plasma integration)"
+pkgdesc="Popup action bar on text selection for KDE Plasma 6 (Wayland + X11)"
 arch=('any')
-url="https://github.com/<user>/selectxt"
+url="https://github.com/pitydah/textpik"
 license=('GPL3')
 depends=('python' 'pyside6' 'wl-clipboard' 'xdotool' 'qt6-svg')
 optdepends=('ydotool: auto-paste on Wayland'
             'wtype: auto-paste on Wayland'
             'konsole: terminal action'
             'ollama: AI query action')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/<user>/selectxt/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::https://github.com/pitydah/textpik/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 
 package() {
     cd "$srcdir/$pkgname-$pkgver"
-    install -Dm755 src/selectxt.py "$pkgdir/usr/bin/selectxt"
-    install -Dm644 assets/app/selectxt.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/selectxt.svg"
-    install -Dm644 packaging/selectxt.desktop "$pkgdir/usr/share/applications/selectxt.desktop"
+    install -Dm755 src/textpik.py "$pkgdir/usr/bin/textpik"
+    install -Dm644 assets/app/textpik.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/textpik.svg"
+    install -Dm644 packaging/textpik.desktop "$pkgdir/usr/share/applications/textpik.desktop"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-    cp -r assets "$pkgdir/usr/share/selectxt/"
-    cp -r kwin "$pkgdir/usr/share/selectxt/"
+    cp -r assets "$pkgdir/usr/share/textpik/"
+    cp -r kwin "$pkgdir/usr/share/textpik/"
 }
