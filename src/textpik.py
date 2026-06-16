@@ -1261,24 +1261,24 @@ class PopupWindow(QWidget):
         self.buttons_layout.setSpacing(spacing)
 
         self.setWindowOpacity(self.settings["popup_opacity"])
-        button_color = self.settings.get("popup_button_color", "transparent")
-        hover_color = self.settings.get("popup_hover_color", "rgba(0,0,0,28)")
-        border_color = self.settings.get("popup_button_border_color", "transparent")
+        bg_lum = color_luminance(self.settings["popup_background_color"])
+        hover_overlay = "rgba(255,255,255,30)" if bg_lum < 0.5 else "rgba(0,0,0,30)"
+        press_overlay = "rgba(255,255,255,50)" if bg_lum < 0.5 else "rgba(0,0,0,50)"
         self.setStyleSheet(
             f"""
             QPushButton {{
-                background-color: {button_color};
-                border: 1px solid {border_color};
+                background-color: transparent;
+                border: none;
                 border-radius: {button_radius}px;
             }}
             QPushButton:hover {{
-                background-color: {hover_color};
-                border: 1px solid {border_color};
+                background-color: {hover_overlay};
+                border: none;
                 border-radius: {button_radius}px;
             }}
             QPushButton:pressed {{
-                background-color: {hover_color};
-                border: 1px solid {border_color};
+                background-color: {press_overlay};
+                border: none;
             }}
             """
         )
