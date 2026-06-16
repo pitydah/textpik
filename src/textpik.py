@@ -109,6 +109,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -122,6 +123,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QSystemTrayIcon,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -1851,21 +1853,6 @@ class SettingsDialog(QDialog):
         row = self.blocked_list.currentRow()
         if row >= 0:
             self.blocked_list.takeItem(row)
-
-    def _update_swatch(self, button, color_name):
-        button.setStyleSheet(
-            "background-color: %s; border: 1px solid #888; border-radius: 3px;" % color_name
-        )
-        button.setToolTip(color_name)
-
-    def choose_color(self, key, button):
-        color = QColorDialog.getColor(QColor(self.settings[key]), self, "Seleccionar color")
-        if color.isValid():
-            self.settings[key] = color.name()
-            self._update_swatch(button, color.name())
-            pair = self._color_widgets.get(key)
-            if pair:
-                pair[1].setText(color.name())
 
     def _add_blocked_activity(self):
         from PySide6.QtWidgets import QInputDialog
