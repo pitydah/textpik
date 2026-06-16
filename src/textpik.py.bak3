@@ -151,7 +151,6 @@ DEFAULT_SETTINGS = {
     "popup_delay_ms": 0,
     "max_selection_length": 5000,
     "confirm_terminal_execution": True,
-    "context_aware": True,
     "enable_wayland_polling": True,
     "log_enabled": True,
     "popup_background_color": "#f7f7f7",
@@ -190,58 +189,55 @@ DEFAULT_ACTIONS = [
         "icon": "open-link.svg",
         "cmd": "open-url",
         "enabled": True,
-        "context": ["url"],
     },
     {
         "name": "Buscar en Google",
         "icon": "search-google.svg",
         "cmd": "xdg-open 'https://www.google.com/search?q={url}'",
         "enabled": True,
-        "context": ["url"],
     },
     {
         "name": "Buscar en YouTube",
         "icon": "search-youtube.svg",
         "cmd": "xdg-open 'https://www.youtube.com/results?search_query={url}'",
         "enabled": True,
-        "context": ["url"],
     },
     {
         "name": "Buscar en Google Maps",
         "icon": "search-maps.svg",
         "cmd": "xdg-open 'https://www.google.com/maps?q={url}'",
         "enabled": True,
-        "context": ["url"],
     },
     {
         "name": "Preguntar a ChatGPT",
         "icon": "chatgpt.svg",
         "cmd": "xdg-open 'https://chatgpt.com/?q={url}'",
         "enabled": True,
-        "context": ["url"],
     },
     {
         "name": "Preguntar a DeepSeek",
         "icon": "deepseek.svg",
         "cmd": "xdg-open 'https://chat.deepseek.com/?q={url}'",
         "enabled": True,
-        "context": ["url"],
     },
     {
         "name": "Buscar en DuckDuckGo",
         "icon": "duckduckgo.svg",
         "cmd": "xdg-open 'https://duckduckgo.com/?q={url}'",
         "enabled": True,
-        "context": ["url"],
     },
     {
         "name": "Ejecutar en terminal",
         "icon": "terminal.svg",
         "cmd": "terminal",
         "enabled": True,
-        "context": ["text", "code", "ip", "number"],
     },
-    {"name": "Imprimir", "icon": "print.svg", "cmd": "print", "enabled": True},
+    {
+        "name": "Imprimir",
+        "icon": "print.svg",
+        "cmd": "print",
+        "enabled": True,
+    },
     {
         "name": "Traducir con Google",
         "icon": "translate-with-google.svg",
@@ -252,60 +248,6 @@ DEFAULT_ACTIONS = [
         "name": "Abrir en Ollama",
         "icon": "open-in-ollama.svg",
         "cmd": "ollama",
-        "enabled": True,
-    },
-    {
-        "name": "Enviar al movil",
-        "icon": "kdeconnect.svg",
-        "cmd": "kdeconnect",
-        "enabled": True,
-    },
-    {
-        "name": "Guardar en Klipper",
-        "icon": "klipper.svg",
-        "cmd": "klipper-save",
-        "enabled": True,
-    },
-    {
-        "name": "Historial Klipper",
-        "icon": "klipper-history.svg",
-        "cmd": "klipper-menu",
-        "enabled": True,
-    },
-    {
-        "name": "Contar palabras",
-        "icon": "counter.svg",
-        "cmd": "count",
-        "enabled": True,
-    },
-    {
-        "name": "MAYUSCULAS",
-        "icon": "uppercase.svg",
-        "cmd": "uppercase",
-        "enabled": True,
-    },
-    {
-        "name": "minusculas",
-        "icon": "lowercase.svg",
-        "cmd": "lowercase",
-        "enabled": True,
-    },
-    {
-        "name": "Capitalizar",
-        "icon": "capitalize.svg",
-        "cmd": "capitalize",
-        "enabled": True,
-    },
-    {
-        "name": "Quitar saltos",
-        "icon": "remove-breaks.svg",
-        "cmd": "remove-breaks",
-        "enabled": True,
-    },
-    {
-        "name": "Diccionario RAE",
-        "icon": "dictionary.svg",
-        "cmd": "xdg-open 'https://dle.rae.es/{url}'",
         "enabled": True,
     },
 ]
@@ -1438,16 +1380,12 @@ def validate_actions(actions):
         cmd = action.get("cmd")
         if not all(isinstance(value, str) and value for value in (name, icon, cmd)):
             continue
-        entry = {
+        valid.append({
             "name": name,
             "icon": icon,
             "cmd": cmd,
             "enabled": bool(action.get("enabled", True)),
-        }
-        ctx = action.get("context")
-        if isinstance(ctx, list) and all(isinstance(c, str) for c in ctx):
-            entry["context"] = ctx
-        valid.append(entry)
+        })
 
     return valid or DEFAULT_ACTIONS
 
@@ -2390,15 +2328,6 @@ class TextPikApp(QObject):
                 return
             logger.info("Mostrando popup para seleccion de %d caracteres", len(text))
             visible = [a for a in self.actions if a.get("enabled", True)]
-            if self.settings.get("context_aware", True) and text:
-                text_types = self._detect_text_type(text)
-                if text_types:
-                    visible = [
-                        a
-                        for a in visible
-                        if "context" not in a
-                        or any(t in text_types for t in a["context"])
-                    ]
             if not visible:
                 logger.info("Popup omitido: no hay acciones habilitadas")
                 return
@@ -2458,67 +2387,6 @@ class TextPikApp(QObject):
                 subprocess.Popen(["xdg-open", url])
             except Exception as exc:
                 QMessageBox.warning(None, "Error", f"No se pudo abrir la URL:\n{exc}")
-            return
-
-        if cmd == "uppercase":
-            QApplication.clipboard().setText(text.upper())
-            self._show_toast("Texto convertido a MAYUSCULAS")
-            return
-
-        if cmd == "lowercase":
-            QApplication.clipboard().setText(text.lower())
-            self._show_toast("Texto convertido a minusculas")
-            return
-
-        if cmd == "capitalize":
-            import re as _re
-            result = _re.sub(
-                r'(^\s*|[.!\?]\s+)([a-z])',
-                lambda m: m.group(1) + m.group(2).upper(),
-                text,
-            )
-            QApplication.clipboard().setText(result)
-            self._show_toast("Texto capitalizado")
-            return
-
-        if cmd == "remove-breaks":
-            import re as _re
-            result = text.replace("\n", " ").replace("\r", " ")
-            result = _re.sub(r" +", " ", result).strip()
-            QApplication.clipboard().setText(result)
-            self._show_toast("Saltos de linea eliminados")
-            return
-
-        if cmd == "count":
-            words = len(text.split())
-            chars = len(text)
-            chars_no_spaces = len(
-                text.replace(" ", "").replace("\n", "").replace("\r", "").replace("\t", "")
-            )
-            stripped_lines = [
-                l for l in text.splitlines() if l.strip()
-            ]
-            line_count = len(stripped_lines)
-            QMessageBox.information(
-                None,
-                "Contar",
-                f"Palabras: {words}\n"
-                f"Caracteres: {chars}\n"
-                f"Caracteres (sin espacios): {chars_no_spaces}\n"
-                f"Lineas (no vacias): {line_count}",
-            )
-            return
-
-        if cmd == "kdeconnect":
-            self._kdeconnect_send(text)
-            return
-
-        if cmd == "klipper-save":
-            self._klipper_save(text)
-            return
-
-        if cmd == "klipper-menu":
-            self._klipper_show_menu()
             return
 
         if is_terminal_execution(cmd) and self.settings.get(
@@ -2607,133 +2475,6 @@ class TextPikApp(QObject):
         layout.addLayout(btn_layout)
 
         dialog.show()
-
-    def _show_toast(self, msg):
-        if hasattr(self, "tray_icon") and self.tray_icon is not None:
-            try:
-                self.tray_icon.showMessage(
-                    "TextPik", msg, QSystemTrayIcon.MessageIcon.Information, 2000
-                )
-            except Exception:
-                pass
-
-    def _kdeconnect_send(self, text):
-        QApplication.clipboard().setText(text)
-        try:
-            from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
-
-            bus = QDBusConnection.sessionBus()
-            iface = QDBusInterface(
-                "org.kde.kdeconnect",
-                "/modules/kdeconnect/devices",
-                "org.freedesktop.DBus.Introspectable",
-                bus,
-            )
-            reply = iface.call("Introspect")
-            if not reply.arguments():
-                raise Exception("No se pudo introspectar KDE Connect")
-            xml = reply.arguments()[0]
-            import re as _re
-            devices = _re.findall(r'<node name="([^"]+)"/>', xml)
-            if not devices:
-                raise Exception("No hay dispositivos emparejados")
-            sent = False
-            for dev_id in devices:
-                cli_iface = QDBusInterface(
-                    "org.kde.kdeconnect",
-                    f"/modules/kdeconnect/devices/{dev_id}/clipboard",
-                    "org.kde.kdeconnect.device.clipboard",
-                    bus,
-                )
-                cli_reply = cli_iface.call("sendClipboard")
-                if cli_reply.type() != QDBusMessage.MessageType.ErrorMessage:
-                    sent = True
-            if sent:
-                self._show_toast("Texto enviado al movil")
-            else:
-                raise Exception("No se pudo enviar a ningun dispositivo")
-        except Exception as exc:
-            QMessageBox.warning(
-                None, "KDE Connect",
-                f"No se pudo enviar al movil:\n{exc}",
-            )
-
-    def _klipper_save(self, text):
-        try:
-            from PySide6.QtDBus import QDBusConnection, QDBusInterface
-
-            bus = QDBusConnection.sessionBus()
-            iface = QDBusInterface(
-                "org.kde.klipper",
-                "/klipper",
-                "org.kde.klipper.klipper",
-                bus,
-            )
-            iface.call("setClipboardContents", text)
-            self._show_toast("Guardado en Klipper")
-        except Exception as exc:
-            QMessageBox.warning(
-                None, "Klipper",
-                f"No se pudo guardar en Klipper:\n{exc}",
-            )
-
-    def _klipper_show_menu(self):
-        try:
-            from PySide6.QtDBus import QDBusConnection, QDBusInterface
-
-            bus = QDBusConnection.sessionBus()
-            iface = QDBusInterface(
-                "org.kde.klipper",
-                "/klipper",
-                "org.kde.klipper.klipper",
-                bus,
-            )
-            iface.call("showKlipperManuallyInvokeActionMenu")
-        except Exception as exc:
-            QMessageBox.warning(
-                None, "Klipper",
-                f"No se pudo mostrar el menu de Klipper:\n{exc}",
-            )
-
-    def _detect_text_type(self, text):
-        import re as _re
-        types = set()
-        stripped = text.strip()
-        if not stripped:
-            return types
-
-        if _re.match(r"^(https?://|ftp://|mailto:|file://)", stripped, _re.I):
-            types.add("url")
-
-        if _re.match(
-            r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', stripped
-        ):
-            types.add("email")
-
-        if _re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", stripped):
-            types.add("ip")
-
-        if _re.match(
-            r'^[\d\s,.+\-*/^()%=<>]+$', stripped
-        ) and any(c.isdigit() for c in stripped):
-            types.add("number")
-
-        code_keywords = [
-            "def ", "class ", "if ", "for ", "while ",
-            "import ", "from ", "const ", "let ", "var ",
-            "function ", "return ", "async ", "await ",
-        ]
-        if any(kw in text for kw in code_keywords):
-            types.add("code")
-        else:
-            lines = text.splitlines()
-            if len(lines) > 2 and any(
-                l.startswith(" ") or l.startswith("\t") for l in lines
-            ):
-                types.add("code")
-
-        types.add("text")
-        return types
 
     def open_config_folder(self):
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
