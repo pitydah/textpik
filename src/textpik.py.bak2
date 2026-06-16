@@ -1568,241 +1568,243 @@ class ActionEditDialog(QDialog):
 class SettingsDialog(QDialog):
     def __init__(self, settings, actions, controller, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("TextPik — Configuracion")
-        self.setMinimumSize(580, 500)
-        self.resize(620, 680)
+        self.setWindowTitle("Configuracion de textpik")
+        self.setMinimumSize(560, 520)
+        self.resize(640, 720)
         self.controller = controller
         self.settings = normalize_settings(settings)
         self.actions = list(actions)
-        self._color_swatches = {}
 
         layout = QVBoxLayout(self)
-        tabs = QTabWidget(self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setMinimumHeight(360)
+        scroll.setMaximumHeight(620)
+        content = QWidget(scroll)
+        content_layout = QVBoxLayout(content)
 
-        # ── Pestaña 1: Apariencia ──
-        ap_tab = QWidget()
-        ap_layout = QVBoxLayout(ap_tab)
+        # --- Apariencia ---
+        ap_group = QGroupBox("Apariencia", self)
+        ap_form = QFormLayout(ap_group)
+        self._color_widgets = {}
 
-        # Swatches de color — botones visuales con el color real
-        colors_group = QGroupBox("Colores de la barra")
-        colors_grid = QGridLayout(colors_group)
-        self._make_swatch(colors_grid, 0, 0, "popup_background_color", "Fondo")
-        self._make_swatch(colors_grid, 0, 1, "popup_border_color", "Borde")
+        def _make_color_row(key, label):
+            container = QWidget(self)
+            h = QHBoxLayout(container)
+            h.setContentsMargins(0, 0, 0, 0)
+            btn = QPushButton(container)
+            btn.setFixedSize(32, 24)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(
+                lambda checked=False, k=key, b=btn: self.choose_color(k, b)
+            )
+            lbl = QLabel(self.settings[key], container)
+            lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            h.addWidget(btn)
+            h.addWidget(lbl)
+            self._update_swatch(btn, self.settings[key])
+            self._color_widgets[key] = (btn, lbl)
+            ap_form.addRow(label, container)
 
-        ap_layout.addWidget(colors_group)
+        _make_color_row("popup_background_color", "Fondo de barra")
+        _make_color_row("popup_border_color", "Borde de barra")
 
-        # Tema predefinido
-        theme_group = QGroupBox("Tema")
-        theme_form = QFormLayout(theme_group)
+        self.icon_size = QSpinBox(self)
+        self.icon_size.setRange(12, 64)
+        self.icon_size.setValue(int(self.settings["popup_icon_size"]))
+        ap_form.addRow("Tamano iconos/barra", self.icon_size)
+
+        self.radius = QSpinBox(self)
+        self.radius.setRange(0, 48)
+        self.radius.setValue(int(self.settings["popup_border_radius"]))
+        ap_form.addRow("Bordes redondeados", self.radius)
+
+        self.opacity = QSpinBox(self)
+        self.opacity.setRange(25, 100)
+        self.opacity.setValue(int(float(self.settings["popup_opacity"]) * 100))
+        ap_form.addRow("Opacidad (%)", self.opacity)
+
         self.theme_combo = QComboBox(self)
         self.theme_combo.addItem("Personalizado", "custom")
         self.theme_combo.addItem("Claro", "light")
         self.theme_combo.addItem("Oscuro", "dark")
         self.theme_combo.addItem("OLED", "oled")
-        idx = self.theme_combo.findData(self.settings.get("theme_preset", "custom"))
+        current_theme = self.settings.get("theme_preset", "custom")
+        idx = self.theme_combo.findData(current_theme)
         self.theme_combo.setCurrentIndex(max(0, idx))
         self.theme_combo.currentIndexChanged.connect(self._apply_theme_preset)
-        theme_form.addRow("Predefinido", self.theme_combo)
-        self.icon_size = self._spin(12, 64, self.settings["popup_icon_size"])
-        theme_form.addRow("Tamano iconos", self.icon_size)
-        self.radius = self._spin(0, 48, int(self.settings["popup_border_radius"]))
-        theme_form.addRow("Bordes redondeados", self.radius)
-        self.opacity = self._spin(25, 100, int(float(self.settings["popup_opacity"]) * 100))
-        theme_form.addRow("Opacidad (%)", self.opacity)
-        ap_layout.addWidget(theme_group)
+        ap_form.addRow("Tema predefinido", self.theme_combo)
 
-        # Extras
-        extra_group = QGroupBox("Extras")
-        extra_form = QFormLayout(extra_group)
-        self.show_numeric_badges = QCheckBox("Mostrar numeros de atajo (1-9) en iconos", self)
-        self.show_numeric_badges.setChecked(bool(self.settings.get("show_numeric_badges", False)))
-        extra_form.addRow("Badges numericos", self.show_numeric_badges)
-        self.language_combo = QComboBox(self)
-        self.language_combo.addItem("Sistema", "auto")
-        self.language_combo.addItem("Espanol", "es")
-        self.language_combo.addItem("English", "en")
-        lidx = self.language_combo.findData(self.settings.get("app_language", "auto"))
-        self.language_combo.setCurrentIndex(max(0, lidx))
-        extra_form.addRow("Idioma", self.language_combo)
-        ap_layout.addWidget(extra_group)
-        ap_layout.addStretch()
+        content_layout.addWidget(ap_group)
 
-        # ── Pestaña 2: Comportamiento ──
-        beh_tab = QWidget()
-        beh_layout = QVBoxLayout(beh_tab)
-        beh_group = QGroupBox("Activacion")
-        beh_form = QFormLayout(beh_group)
-        self.show_on_selection = QCheckBox("Mostrar popup al seleccionar texto", self)
+        # --- Comportamiento ---
+        comp_group = QGroupBox("Comportamiento", self)
+        comp_form = QFormLayout(comp_group)
+
+        self.show_on_selection = QCheckBox("Mostrar al seleccionar texto", self)
         self.show_on_selection.setChecked(bool(self.settings["show_on_selection"]))
-        beh_form.addRow("Activacion", self.show_on_selection)
-        self.popup_delay = self._spin(0, 5000, int(self.settings.get("popup_delay_ms", 0)))
+        comp_form.addRow("Activacion", self.show_on_selection)
+
+        self.popup_delay = QSpinBox(self)
+        self.popup_delay.setRange(0, 5000)
         self.popup_delay.setSuffix(" ms")
-        beh_form.addRow("Retardo", self.popup_delay)
-        self.sticky_popup = QCheckBox("Mantener popup hasta elegir accion o Escape", self)
-        self.sticky_popup.setChecked(bool(self.settings.get("sticky_popup", False)))
-        beh_form.addRow("Modo sticky", self.sticky_popup)
-        self.context_aware = QCheckBox("Mostrar solo acciones relevantes segun el texto", self)
-        self.context_aware.setChecked(bool(self.settings.get("context_aware", True)))
-        beh_form.addRow("Contexto inteligente", self.context_aware)
-        self.enable_global_hotkey = QCheckBox("Atajo global Ctrl+Shift+P", self)
-        self.enable_global_hotkey.setChecked(bool(self.settings.get("enable_global_hotkey", False)))
-        beh_form.addRow("Atajo global", self.enable_global_hotkey)
+        self.popup_delay.setValue(int(self.settings.get("popup_delay_ms", 0)))
+        comp_form.addRow("Retardo", self.popup_delay)
 
-        self.max_selection = self._spin(1, 50000, int(self.settings["max_selection_length"]))
-        beh_form.addRow("Tamano maximo de texto", self.max_selection)
-        self.confirm_terminal = QCheckBox("Confirmar antes de ejecutar en terminal", self)
-        self.confirm_terminal.setChecked(bool(self.settings.get("confirm_terminal_execution", True)))
-        beh_form.addRow("Confirmacion terminal", self.confirm_terminal)
-        self.disable_in_games = QCheckBox("No mostrar con juegos/pantalla completa", self)
+        self.confirm_terminal = QCheckBox(
+            "Preguntar antes de ejecutar en terminal", self
+        )
+        self.confirm_terminal.setChecked(
+            bool(self.settings.get("confirm_terminal_execution", True))
+        )
+        comp_form.addRow("Confirmacion terminal", self.confirm_terminal)
+
+        self.max_selection = QSpinBox(self)
+        self.max_selection.setRange(1, 50000)
+        self.max_selection.setValue(int(self.settings["max_selection_length"]))
+        comp_form.addRow("Maximo texto", self.max_selection)
+
+        self.disable_in_games = QCheckBox("No mostrar en juegos detectados", self)
         self.disable_in_games.setChecked(bool(self.settings["disable_in_games"]))
-        beh_form.addRow("Filtro anti-juegos", self.disable_in_games)
-        beh_layout.addWidget(beh_group)
-        beh_layout.addStretch()
+        comp_form.addRow("Filtro anti-juegos", self.disable_in_games)
 
-        # ── Pestaña 3: Filtros ──
-        flt_tab = QWidget()
-        flt_layout = QVBoxLayout(flt_tab)
+        content_layout.addWidget(comp_group)
 
-        apps_group = QGroupBox("Aplicaciones bloqueadas")
-        apps_layout = QVBoxLayout(apps_group)
-        self.blocked_apps_enabled = QCheckBox("No mostrar popup en estas aplicaciones", self)
-        self.blocked_apps_enabled.setChecked(bool(self.settings.get("blocked_apps_enabled", False)))
-        apps_layout.addWidget(self.blocked_apps_enabled)
+        # --- Filtro de aplicaciones ---
+        filtros_group = QGroupBox("Filtro de aplicaciones", self)
+        filtros_layout = QVBoxLayout(filtros_group)
+
+        self.blocked_apps_enabled = QCheckBox(
+            "No mostrar en estas aplicaciones", self
+        )
+        self.blocked_apps_enabled.setChecked(
+            bool(self.settings.get("blocked_apps_enabled", False))
+        )
+        filtros_layout.addWidget(self.blocked_apps_enabled)
+
         self.blocked_list = QListWidget(self)
-        self.blocked_list.setMaximumHeight(100)
+        self.blocked_list.setMinimumHeight(80)
         self._populate_blocked_list()
-        apps_layout.addWidget(self.blocked_list)
-        abtn = QHBoxLayout()
-        abtn_add = QPushButton("+", self); abtn_add.clicked.connect(self._add_blocked_app); abtn_add.setFixedWidth(32)
-        abtn_rm = QPushButton("−", self); abtn_rm.clicked.connect(self._remove_blocked_app); abtn_rm.setFixedWidth(32)
-        abtn.addWidget(abtn_add); abtn.addWidget(abtn_rm); abtn.addStretch()
-        apps_layout.addLayout(abtn)
-        flt_layout.addWidget(apps_group)
+        filtros_layout.addWidget(self.blocked_list)
 
-        act_group = QGroupBox("Actividades de Plasma bloqueadas")
-        act_layout = QVBoxLayout(act_group)
-        self.blocked_activities_enabled = QCheckBox("No mostrar en estas actividades", self)
-        self.blocked_activities_enabled.setChecked(bool(self.settings.get("blocked_activities_enabled", False)))
-        act_layout.addWidget(self.blocked_activities_enabled)
-        self.blocked_activities_list = QListWidget(self)
-        self.blocked_activities_list.setMaximumHeight(80)
-        for act in self.settings.get("blocked_activities", []):
-            self.blocked_activities_list.addItem(str(act))
-        act_layout.addWidget(self.blocked_activities_list)
-        abtn2 = QHBoxLayout()
-        abtn2_add = QPushButton("+", self); abtn2_add.clicked.connect(self._add_blocked_activity); abtn2_add.setFixedWidth(32)
-        abtn2_rm = QPushButton("−", self); abtn2_rm.clicked.connect(self._remove_blocked_activity); abtn2_rm.setFixedWidth(32)
-        abtn2.addWidget(abtn2_add); abtn2.addWidget(abtn2_rm); abtn2.addStretch()
-        act_layout.addLayout(abtn2)
-        flt_layout.addWidget(act_group)
-        flt_layout.addStretch()
+        btn_layout_f = QHBoxLayout()
+        add_btn = QPushButton("Anadir", self)
+        add_btn.clicked.connect(self._add_blocked_app)
+        remove_btn = QPushButton("Eliminar", self)
+        remove_btn.clicked.connect(self._remove_blocked_app)
+        btn_layout_f.addWidget(add_btn)
+        btn_layout_f.addWidget(remove_btn)
+        btn_layout_f.addStretch()
+        filtros_layout.addLayout(btn_layout_f)
 
-        # ── Pestaña 4: Wayland ──
-        wl_tab = QWidget()
-        wl_layout = QVBoxLayout(wl_tab)
-        wl_group = QGroupBox("Posicionamiento (fallback)")
+        content_layout.addWidget(filtros_group)
+
+        # --- Wayland ---
+        wl_group = QGroupBox("Wayland", self)
         wl_form = QFormLayout(wl_group)
-        self.fallback_top = self._spin(0, 600, int(self.settings["popup_wayland_fallback_top"]))
+
+        self.fallback_top = QSpinBox(self)
+        self.fallback_top.setRange(0, 600)
         self.fallback_top.setSuffix(" px")
-        wl_form.addRow("Posicion superior", self.fallback_top)
+        self.fallback_top.setValue(
+            int(self.settings["popup_wayland_fallback_top"])
+        )
+        wl_form.addRow("Posicion superior fallback", self.fallback_top)
+
         self.fallback_horizontal = QComboBox(self)
         self.fallback_horizontal.addItem("Centrada", "center")
-        self.fallback_horizontal.addItem("Junto al cursor", "cursor")
-        idx = self.fallback_horizontal.findData(self.settings["popup_wayland_fallback_horizontal"])
-        self.fallback_horizontal.setCurrentIndex(max(0, idx))
+        self.fallback_horizontal.addItem("Usar cursor si es posible", "cursor")
+        index = self.fallback_horizontal.findData(
+            self.settings["popup_wayland_fallback_horizontal"]
+        )
+        self.fallback_horizontal.setCurrentIndex(max(0, index))
         wl_form.addRow("Anclaje horizontal", self.fallback_horizontal)
-        self.enable_wl_polling = QCheckBox("Habilitar polling en Wayland", self)
-        self.enable_wl_polling.setChecked(bool(self.settings.get("enable_wayland_polling", True)))
-        wl_form.addRow("Polling", self.enable_wl_polling)
-        wl_layout.addWidget(wl_group)
-        wl_layout.addStretch()
 
-        # ── Pestaña 5: Diagnostico ──
-        diag_tab = QWidget()
-        diag_layout = QVBoxLayout(diag_tab)
-        diag_group = QGroupBox("Sistema")
+        self.enable_wl_polling = QCheckBox("Habilitar polling en Wayland", self)
+        self.enable_wl_polling.setChecked(
+            bool(self.settings.get("enable_wayland_polling", True))
+        )
+        wl_form.addRow("Polling", self.enable_wl_polling)
+
+        content_layout.addWidget(wl_group)
+
+        # --- Diagnostico ---
+        diag_group = QGroupBox("Diagnostico", self)
         diag_form = QFormLayout(diag_group)
+
         self.log_enabled = QCheckBox("Guardar archivo de log", self)
         self.log_enabled.setChecked(bool(self.settings["log_enabled"]))
         diag_form.addRow("Log", self.log_enabled)
+
         self.diagnostics_text = QTextEdit(self)
         self.diagnostics_text.setReadOnly(True)
-        self.diagnostics_text.setMinimumHeight(120)
+        self.diagnostics_text.setMinimumHeight(140)
         self.diagnostics_text.setPlainText(self.controller.build_diagnostics())
         diag_form.addRow("Estado", self.diagnostics_text)
-        dbtn = QHBoxLayout()
-        refresh_btn = QPushButton("Actualizar", self); refresh_btn.clicked.connect(self._refresh_diagnostics)
-        test_btn = QPushButton("Probar popup", self); test_btn.clicked.connect(self._test_popup)
-        dbtn.addWidget(refresh_btn); dbtn.addWidget(test_btn); dbtn.addStretch()
-        diag_form.addRow("Acciones", dbtn)
-        diag_layout.addWidget(diag_group)
-        diag_layout.addStretch()
 
-        # ── Pestaña 6: Acciones ──
-        acttab = QWidget()
-        acttab_layout = QVBoxLayout(acttab)
+        diag_buttons = QHBoxLayout()
+        refresh_diag_btn = QPushButton("Actualizar diagnostico", self)
+        refresh_diag_btn.clicked.connect(self._refresh_diagnostics)
+        test_popup_btn = QPushButton("Probar popup", self)
+        test_popup_btn.clicked.connect(self._test_popup)
+        diag_buttons.addWidget(refresh_diag_btn)
+        diag_buttons.addWidget(test_popup_btn)
+        diag_buttons.addStretch()
+        diag_form.addRow("Pruebas", diag_buttons)
+
+        content_layout.addWidget(diag_group)
+
+        # --- Disposicion de acciones ---
+        disp_group = QGroupBox("Disposicion de acciones", self)
+        disp_layout = QVBoxLayout(disp_group)
+
         self.action_list = QListWidget(self)
         self.action_list.setAlternatingRowColors(True)
-        self.action_list.setMinimumHeight(160)
+        self.action_list.setMinimumHeight(120)
         self._populate_action_list()
-        acttab_layout.addWidget(self.action_list)
-        btns = QHBoxLayout()
-        for text, slot in [("+", self._add_action), ("Editar", self._edit_action),
-                           ("−", self._delete_action), ("↑", self._move_up), ("↓", self._move_down)]:
-            b = QPushButton(text, self); b.clicked.connect(slot)
-            if text in ("+", "−"): b.setFixedWidth(32)
-            btns.addWidget(b)
-        btns.addStretch()
-        acttab_layout.addLayout(btns)
-        note = QLabel("Los iconos se adaptan automaticamente al color de la barra.", self)
+        disp_layout.addWidget(self.action_list)
+
+        btn_layout = QHBoxLayout()
+        add_action_btn = QPushButton("Anadir", self)
+        add_action_btn.clicked.connect(self._add_action)
+        edit_action_btn = QPushButton("Editar", self)
+        edit_action_btn.clicked.connect(self._edit_action)
+        delete_action_btn = QPushButton("Eliminar", self)
+        delete_action_btn.clicked.connect(self._delete_action)
+        up_btn = QPushButton("Subir", self)
+        up_btn.clicked.connect(self._move_up)
+        down_btn = QPushButton("Bajar", self)
+        down_btn.clicked.connect(self._move_down)
+        btn_layout.addWidget(add_action_btn)
+        btn_layout.addWidget(edit_action_btn)
+        btn_layout.addWidget(delete_action_btn)
+        btn_layout.addWidget(up_btn)
+        btn_layout.addWidget(down_btn)
+        btn_layout.addStretch()
+        disp_layout.addLayout(btn_layout)
+
+        note = QLabel(
+            "Los iconos se adaptan automaticamente al color de la barra "
+            "usando variantes blanco/negro.",
+            self,
+        )
         note.setWordWrap(True)
-        acttab_layout.addWidget(note)
+        disp_layout.addWidget(note)
+        content_layout.addWidget(disp_group)
+        content_layout.addStretch()
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
 
-        # ── Montar tabs ──
-        tabs.addTab(ap_tab, "  Apariencia  ")
-        tabs.addTab(beh_tab, "  Comportamiento  ")
-        tabs.addTab(flt_tab, "  Filtros  ")
-        tabs.addTab(wl_tab, "  Wayland  ")
-        tabs.addTab(diag_tab, "  Diagnostico  ")
-        tabs.addTab(acttab, "  Acciones  ")
-        layout.addWidget(tabs, 1)
-
-        # ── Botones OK / Cancelar / Aplicar ──
+        # --- Botones ---
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.Apply, self)
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.Apply,
+            self,
+        )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         buttons.button(QDialogButtonBox.Apply).clicked.connect(self.apply_clicked)
         layout.addWidget(buttons)
-
-    def _spin(self, lo, hi, val):
-        s = QSpinBox(self); s.setRange(lo, hi); s.setValue(val); return s
-
-    def _make_swatch(self, grid, row, col, key, label):
-        container = QWidget(self)
-        h = QHBoxLayout(container); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
-        swatch = QPushButton(container)
-        swatch.setFixedSize(44, 24)
-        swatch.setCursor(Qt.PointingHandCursor)
-        swatch.clicked.connect(lambda checked=False, k=key, b=swatch: self._pick_color(k, b))
-        self._update_swatch(swatch, self.settings[key])
-        name = QLabel(label, container)
-        name.setStyleSheet("font-size: 11px;")
-        h.addWidget(swatch); h.addWidget(name)
-        self._color_swatches[key] = swatch
-        grid.addWidget(container, row, col)
-
-    def _pick_color(self, key, button):
-        color = QColorDialog.getColor(QColor(self.settings[key]), self, "Elegir color")
-        if color.isValid():
-            self.settings[key] = color.name()
-            self._update_swatch(button, color.name())
-
-    def _update_swatch(self, button, color_name):
-        button.setStyleSheet(
-            "background-color: %s; border: 1px solid #888; border-radius: 4px;" % color_name
-        )
-        button.setToolTip(color_name)
 
     def _apply_theme_preset(self):
         preset = self.theme_combo.currentData()
@@ -1816,9 +1818,12 @@ class SettingsDialog(QDialog):
         colors = presets.get(preset, {})
         for key, value in colors.items():
             self.settings[key] = value
-            swatch = self._color_swatches.get(key)
-            if swatch:
-                self._update_swatch(swatch, value)
+            pair = self._color_widgets.get(key)
+            if pair:
+                pair[0].setStyleSheet(
+                    "background-color: %s; border: 1px solid #888; border-radius: 3px;" % value
+                )
+                pair[1].setText(value)
 
     def _refresh_diagnostics(self):
         self.diagnostics_text.setPlainText(self.controller.build_diagnostics())
@@ -1866,20 +1871,6 @@ class SettingsDialog(QDialog):
             pair = self._color_widgets.get(key)
             if pair:
                 pair[1].setText(color.name())
-
-    def _add_blocked_activity(self):
-        from PySide6.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(
-            self, "Anadir actividad",
-            "UUID o nombre de la actividad de Plasma:"
-        )
-        if ok and text.strip():
-            self.blocked_activities_list.addItem(text.strip())
-
-    def _remove_blocked_activity(self):
-        row = self.blocked_activities_list.currentRow()
-        if row >= 0:
-            self.blocked_activities_list.takeItem(row)
 
     def _populate_action_list(self):
         self.action_list.clear()
@@ -1966,8 +1957,6 @@ class SettingsDialog(QDialog):
         self.settings["popup_icon_size"] = self.icon_size.value()
         self.settings["popup_border_radius"] = self.radius.value()
         self.settings["popup_opacity"] = self.opacity.value() / 100
-        self.settings["show_numeric_badges"] = self.show_numeric_badges.isChecked()
-        self.settings["app_language"] = self.language_combo.currentData()
         self.settings["popup_delay_ms"] = self.popup_delay.value()
         self.settings["confirm_terminal_execution"] = self.confirm_terminal.isChecked()
         self.settings["enable_wayland_polling"] = self.enable_wl_polling.isChecked()
@@ -1976,19 +1965,11 @@ class SettingsDialog(QDialog):
         self.settings["max_selection_length"] = self.max_selection.value()
         self.settings["show_on_selection"] = self.show_on_selection.isChecked()
         self.settings["disable_in_games"] = self.disable_in_games.isChecked()
-        self.settings["sticky_popup"] = self.sticky_popup.isChecked()
-        self.settings["enable_global_hotkey"] = self.enable_global_hotkey.isChecked()
-        self.settings["context_aware"] = self.context_aware.isChecked()
         self.settings["theme_preset"] = self.theme_combo.currentData()
         self.settings["blocked_apps_enabled"] = self.blocked_apps_enabled.isChecked()
         self.settings["blocked_apps"] = [
             self.blocked_list.item(i).text()
             for i in range(self.blocked_list.count())
-        ]
-        self.settings["blocked_activities_enabled"] = self.blocked_activities_enabled.isChecked()
-        self.settings["blocked_activities"] = [
-            self.blocked_activities_list.item(i).text()
-            for i in range(self.blocked_activities_list.count())
         ]
         self.settings["log_enabled"] = self.log_enabled.isChecked()
         return normalize_settings(self.settings), list(self.actions)
