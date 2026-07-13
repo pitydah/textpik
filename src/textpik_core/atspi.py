@@ -12,6 +12,8 @@ class AtspiSelectionBackend:
         self.atspi = atspi or self._load()
         self._focused_node = None
         self._focus_listener = None
+        self._selection_listener = None
+        self._selection_callback = None
         self._install_focus_listener()
 
     @staticmethod
@@ -45,6 +47,27 @@ class AtspiSelectionBackend:
         if getattr(event, "detail1", False):
             self._focused_node = getattr(event, "source", None)
 
+    def subscribe_selection_changes(self, callback) -> bool:
+        """Prefer accessibility events; callers may keep polling as fallback."""
+        if not self.available or self._selection_listener is not None:
+            return self._selection_listener is not None
+        try:
+            self._selection_callback = callback
+            self._selection_listener = self.atspi.EventListener.new(
+                self._on_selection_event, None
+            )
+            self._selection_listener.register("object:text-selection-changed")
+            return True
+        except Exception:
+            self._selection_listener = None
+            self._selection_callback = None
+            return False
+
+    def _on_selection_event(self, event):
+        callback = self._selection_callback
+        if callback is not None:
+            callback(getattr(event, "source", None))
+
     def _focused(self, node=None, depth=0, budget=None):
         if not self.available or depth > 8:
             return None
@@ -71,8 +94,8 @@ class AtspiSelectionBackend:
             return None
         return None
 
-    def read_selection(self) -> SelectionContext | None:
-        node = self._focused()
+    def read_selection(self, node=None) -> SelectionContext | None:
+        node = self._focused(node)
         if node is None:
             return None
         try:
@@ -82,7 +105,7 @@ class AtspiSelectionBackend:
                 return None
             role = self._role_name(node)
             name = self._application_name(node)
-            sensitive = any(token in role.lower() for token in ("password", "secret"))
+            sensitive = self._is_protected(node, role)
             coord = getattr(self.atspi.CoordType, "SCREEN", self.atspi.CoordType.SCREEN)
             rect = text_iface.get_range_extents(start, end, coord)
             # Never request contents from a password/secret accessible object.
@@ -108,6 +131,32 @@ class AtspiSelectionBackend:
             )
         except Exception:
             return None
+
+    def _is_protected(self, node, role: str) -> bool:
+        if any(token in role.casefold() for token in ("password", "secret", "protected")):
+            return True
+        try:
+            protected = getattr(self.atspi.StateType, "PROTECTED", None)
+            return protected is not None and node.get_state_set().contains(protected)
+        except Exception:
+            # If a toolkit exposes an explicit password role but a broken state
+            # set, the role check above has already kept us from reading it.
+            return False
+
+    def close(self) -> None:
+        for listener, event_name in (
+            (self._selection_listener, "object:text-selection-changed"),
+            (self._focus_listener, "object:state-changed:focused"),
+        ):
+            if listener is None:
+                continue
+            try:
+                listener.deregister(event_name)
+            except Exception:
+                pass
+        self._selection_listener = None
+        self._focus_listener = None
+        self._selection_callback = None
 
     @staticmethod
     def _editable(node):

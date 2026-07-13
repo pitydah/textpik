@@ -5,12 +5,37 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from .models import ActionOperation, ActionResultType
 
 TRANSFORMS = {"uppercase", "lowercase", "capitalize", "remove-breaks"}
 KNOWN_PERMISSIONS = {"clipboard", "network", "process", "filesystem", "accessibility"}
+
+
+def fuzzy_score(query: str, candidate: str) -> int | None:
+    """Rank compact action queries while tolerating missing characters."""
+    def fold(value):
+        normalized = unicodedata.normalize("NFKD", value.casefold())
+        return "".join(char for char in normalized if not unicodedata.combining(char))
+
+    needle = " ".join(fold(query).split())
+    haystack = fold(candidate)
+    if not needle:
+        return 0
+    if needle in haystack:
+        return haystack.index(needle) - 1000
+    position = -1
+    gaps = 0
+    for char in needle:
+        next_position = haystack.find(char, position + 1)
+        if next_position < 0:
+            return None
+        if position >= 0:
+            gaps += next_position - position - 1
+        position = next_position
+    return gaps + position
 
 
 def infer_category(name: str, command: str) -> str:

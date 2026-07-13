@@ -1,16 +1,18 @@
 import json
 import tempfile
 import unittest
+import weakref
 from pathlib import Path
 from unittest.mock import patch
 
-from src.textpik_core.actions import migrate_action, transform_text
+from src.textpik_core.actions import fuzzy_score, migrate_action, transform_text
 from src.textpik_core.anchors import AnchorResolver, hyprland_cursor_anchor, place_popup
 from src.textpik_core.extensions import load_local_extensions
 from src.textpik_core.atspi import AtspiSelectionBackend
 from src.textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
 from src.textpik_core.selection import is_file_workspace_selection
 from src.textpik_core.integration import action_availability
+from src.textpik_core.popup_state import PopupPhase, PopupStateMachine
 
 
 class ActionContractTest(unittest.TestCase):
@@ -25,6 +27,15 @@ class ActionContractTest(unittest.TestCase):
     def test_transform_behavior(self):
         self.assertEqual(transform_text("remove-breaks", "a\n  b"), "a b")
         self.assertEqual(transform_text("capitalize", "hola. mundo"), "Hola. Mundo")
+
+    def test_fuzzy_action_search(self):
+        self.assertIsNotNone(fuzzy_score("trgoogle", "Traducir con Google"))
+        self.assertLess(
+            fuzzy_score("google", "Buscar en Google"),
+            fuzzy_score("google", "Traducir con Google"),
+        )
+        self.assertIsNone(fuzzy_score("youtube", "Guardar en Klipper"))
+        self.assertIsNotNone(fuzzy_score("mayusculas", "MAYÚSCULAS"))
 
 
 class AnchorTest(unittest.TestCase):
@@ -129,6 +140,87 @@ class AtspiTest(unittest.TestCase):
             calls,
             [("delete", 2, 5), ("insert", 2, "new", 3)],
         )
+
+    def test_selection_event_subscription_forwards_source(self):
+        listeners = []
+
+        class Listener:
+            def __init__(self, callback):
+                self.callback = callback
+                self.registered = []
+
+            def register(self, event):
+                self.registered.append(event)
+
+            def deregister(self, event):
+                self.registered.remove(event)
+
+        class EventListener:
+            @staticmethod
+            def new(callback, _data):
+                listener = Listener(callback)
+                listeners.append(listener)
+                return listener
+
+        class Atspi:
+            pass
+
+        Atspi.EventListener = EventListener
+
+        backend = AtspiSelectionBackend(atspi=Atspi())
+        sources = []
+        self.assertTrue(backend.subscribe_selection_changes(sources.append))
+        selection_listener = listeners[-1]
+        source = object()
+        selection_listener.callback(type("Event", (), {"source": source})())
+        self.assertEqual(sources, [source])
+        backend.close()
+
+    def test_protected_state_is_sensitive_before_reading_text(self):
+        protected = object()
+
+        class StateType:
+            pass
+
+        StateType.PROTECTED = protected
+
+        class Atspi:
+            pass
+
+        Atspi.StateType = StateType
+
+        class States:
+            def contains(self, state):
+                return state is protected
+
+        class Node:
+            def get_state_set(self):
+                return States()
+
+        backend = AtspiSelectionBackend(atspi=Atspi())
+        self.assertTrue(backend._is_protected(Node(), "entry"))
+
+
+class PopupStateTest(unittest.TestCase):
+    def test_state_machine_supports_qt_weak_references(self):
+        state = PopupStateMachine()
+        self.assertIs(weakref.ref(state)(), state)
+
+    def test_popup_lifecycle_and_duplicate_guard(self):
+        state = PopupStateMachine()
+        signature = ("text", "app")
+        self.assertTrue(state.begin(signature))
+        self.assertEqual(state.phase, PopupPhase.STABILIZING)
+        state.visible()
+        self.assertFalse(state.begin(signature))
+        state.reset()
+        self.assertTrue(state.begin(signature))
+
+    def test_suppression_records_reason(self):
+        state = PopupStateMachine()
+        state.suppress("sensitive")
+        self.assertEqual(state.phase, PopupPhase.SUPPRESSED)
+        self.assertEqual(state.reason, "sensitive")
 
 
 if __name__ == "__main__":

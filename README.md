@@ -14,7 +14,8 @@ copy, search, translate, open links, and more with one click.
   terminal, print, Ollama, KDE Connect and Klipper
 - Context-aware filtering for URLs, email, code, numbers and regular text,
   while preserving the user's fixed order
-- Compact popup plus searchable “More actions” palette with pinning
+- Compact popup plus fuzzy-searchable “More actions” palette with pinning and
+  one-click per-application exclusion
 - Smart placement beside the pointer without covering the selected text,
   right-click suppression and optional inactivity auto-hide
 - Configurable icon size, bar padding, spacing, visible-action count and cursor gap
@@ -25,12 +26,15 @@ copy, search, translate, open links, and more with one click.
   KDE Connect, Klipper and automatic paste fallbacks
 - Native URL/file opening through Qt desktop services and sandbox portals
 - KDE Plasma integration: Klipper D-Bus, KWin cursor bridge, system tray
-- Wayland positioning via AT-SPI selection geometry, KWin, Hyprland and Sway
+- Event-driven AT-SPI selection detection with a low-frequency compatibility
+  fallback for applications that do not emit accessibility notifications
+- Wayland positioning via AT-SPI selection geometry, KWin, Hyprland and Sway;
+  slow compositor/process probes run outside the popup display path
 - Text transformations replace editable selections through AT-SPI, with a safe
   clipboard fallback
 - Click-outside-to-close
 - Configurable settings with theme presets (Light, Dark, OLED)
-- Numeric shortcuts 1-9
+- Numeric shortcuts 1-9 and arrow/Enter keyboard navigation when invoked by hotkey
 - Per-application, activity and game exclusions
 
 ## Requirements

@@ -1,14 +1,19 @@
+import inspect
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
 from src.textpik import (
     ActionPalette,
     BaseSelectionMonitor,
+    TextPikApp,
+    FunctionWorker,
     build_command_argv,
     classify_text,
     desktop_environment,
@@ -20,6 +25,13 @@ from src.textpik import (
 
 
 class CoreHelpersTest(unittest.TestCase):
+    def test_popup_hot_path_avoids_desktop_subprocess_probes(self):
+        source = inspect.getsource(TextPikApp.show_popup)
+        self.assertNotIn("hyprland_cursor_anchor(", source)
+        self.assertNotIn("sway_cursor_anchor(", source)
+        self.assertNotIn("get_cursor_pos(", source)
+        self.assertNotIn("is_foreground_process_game(", source)
+
     def test_boolean_strings_are_normalized(self):
         settings = normalize_settings({"sticky_popup": "false", "context_aware": "yes"})
         self.assertFalse(settings["sticky_popup"])
@@ -40,6 +52,15 @@ class CoreHelpersTest(unittest.TestCase):
     def test_url_detection_rejects_regular_text(self):
         self.assertEqual(normalize_url("hello world"), "")
         self.assertNotIn("url", classify_text("hello world"))
+
+    def test_url_detection_does_not_treat_email_or_decimal_as_url(self):
+        self.assertEqual(normalize_url("person@example.com"), "")
+        self.assertEqual(normalize_url("1.2"), "")
+        self.assertNotIn("url", classify_text("person@example.com"))
+
+    def test_worker_is_not_auto_deleted_in_its_thread(self):
+        worker = FunctionWorker(lambda: "ok")
+        self.assertFalse(worker.autoDelete())
 
     def test_context_classification(self):
         self.assertIn("email", classify_text("person@example.com"))
@@ -102,6 +123,36 @@ class SelectionStateTest(unittest.TestCase):
         with patch.object(monitor, "_secondary_button_pressed", return_value=True):
             monitor._selection_event()
         self.assertFalse(monitor.timer_debounce.isActive())
+
+    def test_selection_waits_until_primary_button_is_released(self):
+        class Monitor(BaseSelectionMonitor):
+            reads = 0
+
+            def _read_selection_text(self):
+                self.reads += 1
+                return "selected"
+
+        monitor = Monitor()
+        with patch.object(monitor, "_primary_button_pressed", return_value=True):
+            monitor._debounce_expired()
+        self.assertEqual(monitor.reads, 0)
+        self.assertTrue(monitor.timer_debounce.isActive())
+
+    def test_paste_keeps_existing_clipboard_contents(self):
+        clipboard = self.app.clipboard()
+        clipboard.setText("clipboard value")
+        controller = SimpleNamespace(_show_toast=lambda _message: None)
+        loop = QEventLoop()
+        with (
+            patch("src.textpik.is_qt_wayland", return_value=False),
+            patch("src.textpik.check_command", side_effect=lambda name: name == "xdotool"),
+            patch("src.textpik.subprocess.Popen") as popen,
+        ):
+            TextPikApp.paste_clipboard(controller)
+            QTimer.singleShot(150, loop.quit)
+            loop.exec()
+        self.assertEqual(clipboard.text(), "clipboard value")
+        popen.assert_called_once_with(["xdotool", "key", "ctrl+v"])
 
 
 class PopupCompositionTest(unittest.TestCase):
