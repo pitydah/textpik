@@ -1,0 +1,56 @@
+{
+    "app-id": "io.github.pitydah.textpik",
+    "runtime": "org.kde.Platform",
+    "runtime-version": "6.8",
+    "sdk": "org.kde.Sdk",
+    "base": "io.qt.PySide.BaseApp",
+    "base-version": "6.8",
+    "command": "textpik",
+    "finish-args": [
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--device=dri",
+        "--share=network",
+        "--talk-name=org.a11y.Bus",
+        "--talk-name=org.freedesktop.Notifications",
+        "--talk-name=org.kde.StatusNotifierWatcher",
+        "--talk-name=org.kde.klipper",
+        "--talk-name=org.kde.kdeconnect",
+        "--talk-name=org.kde.ActivityManager",
+        "--own-name=org.textpik.CursorBridge"
+    ],
+    "modules": [
+        {
+            "name": "wl-clipboard",
+            "buildsystem": "meson",
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/bugaevc/wl-clipboard.git",
+                    "tag": "v2.3"
+                }
+            ]
+        },
+        {
+            "name": "TextPik",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -d /app/share/applications /app/share/metainfo /app/share/icons/hicolor/scalable/apps",
+                "install -Dm755 src/textpik.py /app/bin/textpik",
+                "cp -r src/textpik_core /app/bin/textpik_core",
+                "sed 's/^Icon=textpik$/Icon=io.github.pitydah.textpik/; s/^StartupWMClass=textpik$/StartupWMClass=io.github.pitydah.textpik/' packaging/textpik.desktop > /app/share/applications/io.github.pitydah.textpik.desktop",
+                "install -Dm644 assets/app/textpik.svg /app/share/icons/hicolor/scalable/apps/io.github.pitydah.textpik.svg",
+                "sed 's#textpik.desktop#io.github.pitydah.textpik.desktop#' packaging/io.github.pitydah.textpik.metainfo.xml > /app/share/metainfo/io.github.pitydah.textpik.metainfo.xml",
+                "cp -r assets /app/share/textpik/",
+                "cp -r kwin /app/share/textpik/"
+            ],
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "../.."
+                }
+            ]
+        }
+    ]
+}

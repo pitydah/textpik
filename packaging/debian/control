@@ -1,0 +1,16 @@
+Source: textpik
+Section: utils
+Priority: optional
+Maintainer: TextPik contributors <pitydah@github.com>
+Build-Depends: debhelper-compat (= 13), dh-python, python3-all, pybuild-plugin-pyproject
+Standards-Version: 4.6.2
+Homepage: https://github.com/pitydah/textpik
+Rules-Requires-Root: no
+
+Package: textpik
+Architecture: all
+Depends: ${misc:Depends}, ${python3:Depends}, python3-pyside6.qtcore, python3-pyside6.qtgui, python3-pyside6.qtwidgets, python3-pyside6.qtdbus, python3-gi, gir1.2-atspi-2.0, xdg-utils
+Recommends: wl-clipboard, xdotool
+Suggests: wtype, ydotool, kdeconnect, cups-client
+Description: compact action bar for selected text
+ TextPik shows context-aware actions next to selected text on Linux desktops.

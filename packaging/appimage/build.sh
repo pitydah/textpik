@@ -23,6 +23,7 @@ python3 -m venv "$BUILD_DIR/venv"
     --onedir --name "$APP_NAME" --clean \
     --add-data "assets:assets" \
     --add-data "kwin:kwin" \
+    --collect-submodules textpik_core \
     --hidden-import PySide6.QtDBus \
     --hidden-import PySide6.QtSvg \
     src/textpik.py
@@ -31,7 +32,7 @@ python3 -m venv "$BUILD_DIR/venv"
 cp -r "$PROJECT_DIR/dist/$APP_NAME"/* "$APPDIR/"
 cp "$PROJECT_DIR/packaging/textpik.desktop" "$APPDIR/"
 cp "$PROJECT_DIR/assets/app/textpik.svg" "$APPDIR/textpik.svg"
-ln -sf textpik "$APPDIR/AppRun"
+ln -sf TextPik "$APPDIR/AppRun"
 
 echo "==> AppImage prepared at $APPDIR"
 echo "==> Run 'appimagetool $APPDIR' to create the AppImage"

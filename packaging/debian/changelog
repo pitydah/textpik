@@ -1,0 +1,5 @@
+textpik (0.4.0-1) unstable; urgency=medium
+
+  * Cross-desktop Wayland selection and popup positioning release.
+
+ -- TextPik contributors <pitydah@github.com>  Mon, 13 Jul 2026 00:00:00 -0400

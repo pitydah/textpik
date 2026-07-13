@@ -1,6 +1,6 @@
 # TextPik
 
-Popup action bar on text selection for **KDE Plasma 6** (Wayland & X11).
+Popup action bar on text selection for Linux desktops (Wayland & X11).
 
 Select text anywhere and a customizable action bar appears at your cursor —
 copy, search, translate, open links, and more with one click.
@@ -10,22 +10,36 @@ copy, search, translate, open links, and more with one click.
 
 ## Features
 
-- 13 built-in actions: copy, paste, open URL, Google, YouTube, Maps,
-  ChatGPT, DeepSeek, DuckDuckGo, terminal, print, translate, Ollama
+- 22 built-in actions: copy/paste, search, translation, text transforms,
+  terminal, print, Ollama, KDE Connect and Klipper
+- Context-aware filtering for URLs, email, code, numbers and regular text,
+  while preserving the user's fixed order
+- Compact popup plus searchable “More actions” palette with pinning
+- Smart placement beside the pointer without covering the selected text,
+  right-click suppression and optional inactivity auto-hide
+- Configurable icon size, bar padding, spacing, visible-action count and cursor gap
+- File-manager awareness: file objects are ignored while text fields still work
+- Native desktop identity, XDG autostart management, AppStream metadata and
+  system-tray active/paused status
+- Capability-aware actions with clear status for CUPS, Ollama, terminals,
+  KDE Connect, Klipper and automatic paste fallbacks
+- Native URL/file opening through Qt desktop services and sandbox portals
 - KDE Plasma integration: Klipper D-Bus, KWin cursor bridge, system tray
-- Wayland native support via KWin
+- Wayland positioning via AT-SPI selection geometry, KWin, Hyprland and Sway
+- Text transformations replace editable selections through AT-SPI, with a safe
+  clipboard fallback
 - Click-outside-to-close
 - Configurable settings with theme presets (Light, Dark, OLED)
 - Numeric shortcuts 1-9
-- Spanish / English
+- Per-application, activity and game exclusions
 
 ## Requirements
 
-- **KDE Plasma 6** (Wayland or X11)
+- KDE Plasma, GNOME, Hyprland, Sway or another modern Linux desktop
 - Python 3.10+
 - [PySide6](https://pypi.org/project/PySide6/)
-- `wl-clipboard` (Wayland) or `xclip`/`xsel` (X11)
-- `xdotool`
+- `wl-clipboard` plus `wtype` or `ydotool` on Wayland
+- `xdotool` on X11
 
 ## Installation
 
@@ -57,20 +71,24 @@ python3 src/textpik.py
 
 | Feature | Wayland | X11 |
 |---------|---------|-----|
-| Cursor position | KWin bridge script | xdotool (native) |
+| Popup anchor | AT-SPI, then KWin/Hyprland/Sway/pointer | AT-SPI or xdotool |
 | Click-outside | focus events + KWin | X11 pointer polling |
 | Clipboard | wl-clipboard | xclip / xsel |
 | Window opacity | Not supported | Fade-in animation |
 
-On Wayland, activate the KWin bridge after installation:
+On KDE Wayland, activate the optional KWin bridge after installation:
 
 **System Settings → Window Management → KWin Scripts → check "TextPik Cursor Bridge" → Apply**
 
-Without this, cursor positioning falls back to screen center.
+On other Wayland desktops, TextPik first asks AT-SPI for the selected text
+geometry. If the application does not expose accessibility information it uses
+the compositor adapter, and finally a safe screen-relative fallback. Enable the
+desktop accessibility bus for the most accurate result on GNOME and other
+non-KDE environments.
 
 ## Compatibility
 
-Supported and tested on KDE Plasma 6:
+Distribution support:
 
 | Distro | Status |
 |--------|--------|
@@ -79,21 +97,58 @@ Supported and tested on KDE Plasma 6:
 | KDE neon / Kubuntu 24.04+ | Supported |
 | Debian 13 KDE | Supported |
 | openSUSE Tumbleweed KDE | Supported |
+| Debian 13 / Ubuntu 24.04+ | Supported through modular PySide6 packages |
+| Fedora / CentOS Stream | Supported; EPEL or pip may be needed on CentOS |
+| Alpine Linux | Supported through `apk` |
+| Void Linux | Supported through `xbps-install` |
+| Slackware | Community support; SlackBuilds required for desktop tools |
 
-Non-KDE environments (GNOME, XFCE, Sway, Hyprland) are **not supported**.
-The app depends on KWin for cursor positioning and popup behavior.
+Desktop support:
+
+| Desktop | X11 | Wayland |
+|---------|-----|---------|
+| KDE Plasma | Full | Full with optional KWin cursor bridge |
+| GNOME | Full | Supported with safe popup-position fallback |
+| Cinnamon / MATE / XFCE | Full | Supported where the desktop offers Wayland |
+| Sway / Hyprland / other wlroots | N/A | Supported with `wl-clipboard` and `wtype` |
+
+Klipper actions are shown only in KDE. KDE Connect remains available on other
+desktops when its D-Bus service or `kdeconnect-cli` is installed. Selection
+monitoring uses X11 PRIMARY or the standard Wayland `wl-clipboard` protocol.
+
+## Packaging
+
+- `packaging/install.sh`: portable per-user installation for Arch, Debian,
+  Ubuntu, Fedora, CentOS, openSUSE, Alpine, Void and Slackware. Files are copied to
+  `~/.local/share/textpik`, so the original checkout can be moved or deleted.
+- `packaging/arch/PKGBUILD`: native Arch package with optional integrations.
+- `packaging/debian`: Debian/Ubuntu source package metadata.
+- `packaging/rpm/textpik.spec`: Fedora/RHEL-family RPM recipe.
+- `packaging/io.github.pitydah.textpik.metainfo.xml`: AppStream metadata used
+  by software centers and native packages.
+- `packaging/flatpak/io.github.pitydah.textpik.json`: KDE/PySide Flatpak
+  manifest with `wl-clipboard` bundled for primary-selection monitoring.
+- `packaging/appimage/build.sh`: self-contained AppImage build using
+  PyInstaller.
+
+The source resolves assets from development checkouts, user installations,
+system packages, Flatpak and PyInstaller/AppImage layouts.
 
 ## CLI mode
 
 ```bash
-textpik run "Google" "search query"
-textpik run "Copiar" "text to copy"
+textpik run "Buscar en Google" "search query"
+textpik run "Buscar en DuckDuckGo" "text to search"
 ```
 
 ## Configuration
 
 Settings: `~/.config/textpik/settings.json`
 Actions:  `~/.config/textpik/actions.json`
+Local extensions: `~/.local/share/textpik/extensions/<id>/manifest.json`
+
+The local extension format and permission model are documented in
+[`docs/extensions.md`](docs/extensions.md).
 Logs:     `~/.cache/textpik/textpik.log`
 
 ## License

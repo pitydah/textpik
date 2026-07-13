@@ -1,0 +1,35 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install PySide6 ruff
+      - run: python -m unittest discover -s tests -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - run: python -m py_compile src/textpik.py src/textpik_core/*.py
+      - run: ruff check src tests --select E9,F63,F7,F82
+      - run: pip install build && python -m build
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y appstream desktop-file-utils
+      - run: desktop-file-validate packaging/textpik.desktop
+      - run: appstreamcli validate --no-net packaging/io.github.pitydah.textpik.metainfo.xml
+      - run: bash -n packaging/install.sh packaging/run.sh packaging/appimage/build.sh
+      - run: python -m json.tool packaging/flatpak/io.github.pitydah.textpik.json >/dev/null

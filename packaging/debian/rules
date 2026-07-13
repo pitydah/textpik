@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=pybuild
+
+override_dh_auto_install:
+	dh_auto_install
+	install -Dm644 packaging/textpik.desktop debian/textpik/usr/share/applications/textpik.desktop
+	install -Dm644 assets/app/textpik.svg debian/textpik/usr/share/icons/hicolor/scalable/apps/textpik.svg
+	install -Dm644 packaging/io.github.pitydah.textpik.metainfo.xml debian/textpik/usr/share/metainfo/io.github.pitydah.textpik.metainfo.xml
+	cp -a assets debian/textpik/usr/share/textpik/
+	cp -a kwin debian/textpik/usr/share/textpik/

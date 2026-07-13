@@ -31,8 +31,33 @@ function onClientActivated(client) {
     }
 }
 
+function identifyTextPik(window) {
+    if (!window) {
+        return false;
+    }
+    const caption = String(window.caption || "").toLowerCase();
+    const resourceClass = String(window.resourceClass || "").toLowerCase();
+    const resourceName = String(window.resourceName || "").toLowerCase();
+    return caption === "textpik" || resourceClass === "textpik" || resourceName === "textpik";
+}
+
+function keepTextPikOutOfTaskManager(window) {
+    if (!identifyTextPik(window)) {
+        return;
+    }
+    window.skipTaskbar = true;
+    window.skipSwitcher = true;
+    window.keepAbove = true;
+}
+
 workspace.cursorPosChanged.connect(sendCursorPos);
 workspace.clientActivated.connect(onClientActivated);
+if (workspace.windowAdded) {
+    workspace.windowAdded.connect(keepTextPikOutOfTaskManager);
+}
+if (workspace.windowList) {
+    workspace.windowList().forEach(keepTextPikOutOfTaskManager);
+}
 sendCursorPos();
 if (typeof setInterval === "function") {
     setInterval(sendCursorPos, 1000);
