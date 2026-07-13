@@ -6,11 +6,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.textpik_core.actions import fuzzy_score, migrate_action, transform_text
-from src.textpik_core.anchors import AnchorResolver, hyprland_cursor_anchor, place_popup
+from src.textpik_core.anchors import (
+    AnchorResolver,
+    hyprland_cursor_anchor,
+    place_popup,
+    stabilize_popup_position,
+)
 from src.textpik_core.extensions import load_local_extensions
 from src.textpik_core.atspi import AtspiSelectionBackend
 from src.textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
-from src.textpik_core.selection import is_file_workspace_selection
+from src.textpik_core.selection import (
+    evaluate_selection_intent,
+    is_file_workspace_selection,
+)
 from src.textpik_core.integration import action_availability
 from src.textpik_core.popup_state import PopupPhase, PopupStateMachine
 
@@ -56,6 +64,25 @@ class AnchorTest(unittest.TestCase):
         x, y = place_popup((280, 124), (160, 40), (0, 0, 800, 600), selection, 6)
         self.assertFalse(100 < x + 160 and x < 280 and 100 < y + 40 and y < 124)
 
+    def test_popup_position_ignores_tiny_anchor_jitter(self):
+        position = stabilize_popup_position(
+            (204, 106),
+            (200, 100),
+            (160, 40),
+            threshold=14,
+        )
+        self.assertEqual(position, (200, 100))
+
+    def test_popup_position_moves_if_previous_would_cover_selection(self):
+        position = stabilize_popup_position(
+            (214, 100),
+            (200, 100),
+            (160, 40),
+            avoid_rect=(220, 100, 100, 30),
+            threshold=14,
+        )
+        self.assertEqual(position, (214, 100))
+
 
 class SelectionPolicyTest(unittest.TestCase):
     def test_file_item_is_ignored_but_file_manager_text_is_allowed(self):
@@ -67,6 +94,24 @@ class SelectionPolicyTest(unittest.TestCase):
         )
         self.assertTrue(is_file_workspace_selection(file_item, file_item.text))
         self.assertFalse(is_file_workspace_selection(location, location.text))
+
+    def test_intent_engine_rejects_controls_and_textpik_itself(self):
+        control = SelectionContext("Copiar", application="Firefox", role="menu item")
+        own_ui = SelectionContext("Más acciones", application="TextPik", role="text")
+        self.assertEqual(
+            evaluate_selection_intent(control, control.text).reason,
+            "non-text-control",
+        )
+        self.assertEqual(
+            evaluate_selection_intent(own_ui, own_ui.text).reason,
+            "self",
+        )
+
+    def test_intent_engine_allows_real_file_manager_text(self):
+        context = SelectionContext(
+            "/home/user", application="Nautilus", role="text entry"
+        )
+        self.assertTrue(evaluate_selection_intent(context, context.text).allowed)
 
 
 class IntegrationPolicyTest(unittest.TestCase):

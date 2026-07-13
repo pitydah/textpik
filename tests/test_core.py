@@ -62,6 +62,28 @@ class CoreHelpersTest(unittest.TestCase):
         worker = FunctionWorker(lambda: "ok")
         self.assertFalse(worker.autoDelete())
 
+    def test_diagnostic_report_does_not_include_selected_text(self):
+        controller = SimpleNamespace(
+            app=SimpleNamespace(platformName=lambda: "wayland"),
+            monitor=BaseSelectionMonitor(),
+            atspi=SimpleNamespace(available=True),
+            atspi_events_active=True,
+            _desktop_dbus_services=lambda: {"org.kde.klipper"},
+            _selection_session=7,
+            popup_state=SimpleNamespace(
+                phase=SimpleNamespace(value="visible"),
+                reason="",
+            ),
+        )
+        controller.monitor._last_text = "private selected text"
+        with (
+            patch("src.textpik.desktop_environment", return_value="kde"),
+            patch("src.textpik.check_command", return_value=False),
+        ):
+            report = TextPikApp.diagnostic_report(controller)
+        self.assertNotIn("private selected text", report)
+        self.assertIn('"selection_session": 7', report)
+
     def test_context_classification(self):
         self.assertIn("email", classify_text("person@example.com"))
         self.assertIn("ip", classify_text("192.168.1.20"))
@@ -137,6 +159,19 @@ class SelectionStateTest(unittest.TestCase):
             monitor._debounce_expired()
         self.assertEqual(monitor.reads, 0)
         self.assertTrue(monitor.timer_debounce.isActive())
+
+    def test_stale_selection_result_is_discarded(self):
+        class Monitor(BaseSelectionMonitor):
+            pass
+
+        monitor = Monitor()
+        old_revision = monitor._next_revision()
+        monitor._next_revision()
+        changed = []
+        monitor.selection_changed.connect(lambda: changed.append(True))
+        self.assertFalse(monitor._accept_selection_text("old", old_revision))
+        self.assertEqual(monitor.get_last_text(), "")
+        self.assertEqual(changed, [])
 
     def test_paste_keeps_existing_clipboard_contents(self):
         clipboard = self.app.clipboard()

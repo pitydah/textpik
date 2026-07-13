@@ -29,13 +29,14 @@ try:
         AnchorResolver,
         hyprland_cursor_anchor,
         place_popup,
+        stabilize_popup_position,
         sway_cursor_anchor,
     )
     from textpik_core.atspi import AtspiSelectionBackend
     from textpik_core.extensions import load_local_extensions
     from textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
     from textpik_core.integration import action_availability
-    from textpik_core.selection import is_file_workspace_selection
+    from textpik_core.selection import evaluate_selection_intent
     from textpik_core.popup_state import PopupPhase, PopupStateMachine
 except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.actions import PermissionStore, fuzzy_score, migrate_action, transform_text
@@ -43,13 +44,14 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
         AnchorResolver,
         hyprland_cursor_anchor,
         place_popup,
+        stabilize_popup_position,
         sway_cursor_anchor,
     )
     from .textpik_core.atspi import AtspiSelectionBackend
     from .textpik_core.extensions import load_local_extensions
     from .textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
     from .textpik_core.integration import action_availability
-    from .textpik_core.selection import is_file_workspace_selection
+    from .textpik_core.selection import evaluate_selection_intent
     from .textpik_core.popup_state import PopupPhase, PopupStateMachine
 
 
@@ -1015,13 +1017,23 @@ class BaseSelectionMonitor(QObject):
         self._last_emit_text = ""
         self._last_emit_at = 0.0
         self._suppress_events_until = 0.0
+        self._revision = 0
+        self._scheduled_revision = 0
         self._pointer = X11Pointer()
         self.timer_debounce = QTimer(self)
         self.timer_debounce.setSingleShot(True)
         self.timer_debounce.timeout.connect(self._debounce_expired)
 
-    def _schedule_read(self, force_emit=True):
+    def _next_revision(self):
+        self._revision += 1
+        return self._revision
+
+    def _schedule_read(self, force_emit=True, revision=None):
         if self._active:
+            revision = revision if revision is not None else self._next_revision()
+            if revision != self._revision:
+                return
+            self._scheduled_revision = revision
             self._force_emit = self._force_emit or force_emit
             delay = max(70, int(self.settings.get("popup_delay_ms", 0)))
             self.timer_debounce.start(delay)
@@ -1031,11 +1043,14 @@ class BaseSelectionMonitor(QObject):
             logger.debug("Evento de selección propio ignorado")
             return
         if self._secondary_button_pressed():
+            self.suppress_events(500)
+            self._next_revision()
             logger.debug("Evento de selección ignorado durante clic secundario")
             return
         # Wayland notifications may repeat for the same PRIMARY payload when a
         # context menu opens. A changed payload is sufficient to prove selection.
-        self._schedule_read(force_emit=not is_wayland())
+        revision = self._next_revision()
+        self._schedule_read(force_emit=not is_wayland(), revision=revision)
 
     def _secondary_button_pressed(self):
         try:
@@ -1065,17 +1080,26 @@ class BaseSelectionMonitor(QObject):
         return ""
 
     def _debounce_expired(self):
+        revision = self._scheduled_revision
+        if revision != self._revision:
+            return
         if self._secondary_button_pressed():
             self._force_emit = False
+            self.suppress_events(500)
+            self._next_revision()
             logger.debug("Lectura de selección cancelada por clic secundario")
             return
         if self._primary_button_pressed():
             self.timer_debounce.start(45)
             return
-        self._accept_selection_text(self._read_selection_text())
+        self._accept_selection_text(self._read_selection_text(), revision)
 
-    def _accept_selection_text(self, raw_text):
+    def _accept_selection_text(self, raw_text, revision=None):
         """Validate and emit a completed synchronous or asynchronous read."""
+        revision = self._revision if revision is None else revision
+        if not self._active or revision != self._revision:
+            logger.debug("Resultado de selección obsoleto descartado: %s", revision)
+            return False
         text = str(raw_text or "").strip()
         now = time.monotonic()
         should_emit = self._force_emit or text != self._last_text
@@ -1085,7 +1109,7 @@ class BaseSelectionMonitor(QObject):
                 logger.info("Seleccion primaria vacia; ocultando popup")
             self._last_text = ""
             self.selection_cleared.emit()
-            return
+            return True
 
         max_length = self.settings.get("max_selection_length", 5000)
         if len(text) > max_length:
@@ -1096,23 +1120,25 @@ class BaseSelectionMonitor(QObject):
             )
             self._last_text = ""
             self.selection_cleared.emit()
-            return
+            return True
 
         if text and should_emit:
             if text == self._last_emit_text and now - self._last_emit_at < 0.45:
                 logger.debug("Seleccion duplicada ignorada")
-                return
+                return True
             logger.info("Seleccion detectada: %d caracteres", len(text))
             self._last_text = text
             self._last_emit_text = text
             self._last_emit_at = now
             self.selection_changed.emit()
+        return True
 
     def get_last_text(self):
         return self._last_text
 
     def pause(self):
         self._active = False
+        self._next_revision()
         self.timer_debounce.stop()
 
     def resume(self):
@@ -1143,6 +1169,7 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
         self._dbus_monitor = None
         self._wl_paste_monitor = None
         self._wl_read_process = None
+        self._wl_read_revision = 0
         self._ignore_next_wl_paste_event = True
         self._last_wl_paste_event_at = 0.0
         self._wl_restart_attempts = 0
@@ -1291,8 +1318,13 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
         if not self._use_wl_paste:
             super()._debounce_expired()
             return
+        revision = self._scheduled_revision
+        if revision != self._revision:
+            return
         if self._secondary_button_pressed():
             self._force_emit = False
+            self.suppress_events(500)
+            self._next_revision()
             return
         if self._primary_button_pressed():
             self.timer_debounce.start(45)
@@ -1303,11 +1335,13 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
             return
         process = QProcess(self)
         self._wl_read_process = process
+        self._wl_read_revision = revision
         process.finished.connect(self._on_wl_read_finished)
         process.start("wl-paste", ["--primary", "--no-newline"])
 
     def _on_wl_read_finished(self, exit_code, _exit_status):
         process, self._wl_read_process = self._wl_read_process, None
+        revision, self._wl_read_revision = self._wl_read_revision, 0
         if process is None:
             return
         text = ""
@@ -1323,7 +1357,11 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
         process.deleteLater()
         if not self._active:
             return
-        self._accept_selection_text(text)
+        accepted = self._accept_selection_text(text, revision)
+        if not accepted and self._scheduled_revision == self._revision:
+            # An event arrived while wl-paste was still reading the previous
+            # selection. Start one fresh read instead of showing stale text.
+            self.timer_debounce.start(0)
 
     def _read_selection_text(self):
         if self._use_wl_paste:
@@ -1720,6 +1758,8 @@ class PopupWindow(QWidget):
         self._keyboard_index = -1
         self._more_menu_open = False
         self._application = ""
+        self._last_stable_position = None
+        self._last_position_at = 0.0
         self.palette = ActionPalette(self)
         self.palette.action_triggered.connect(self._on_click)
         self.palette.pin_requested.connect(self.pin_requested.emit)
@@ -2022,6 +2062,20 @@ class PopupWindow(QWidget):
 
             x = max(geo.left(), x)
             y = max(geo.top(), y)
+            previous = (
+                self._last_stable_position
+                if time.monotonic() - self._last_position_at <= 1.5
+                else None
+            )
+            x, y = stabilize_popup_position(
+                (x, y),
+                previous,
+                (width, height),
+                avoid_rect,
+                threshold=14,
+            )
+            self._last_stable_position = (x, y)
+            self._last_position_at = time.monotonic()
             self.move(x, y)
             logger.info(
                 "Popup: cursor=(%s,%s reliable=%s) screen=%s,%s %sx%s pos=(%s,%s) size=%sx%s",
@@ -3155,13 +3209,14 @@ class TextPikApp(QObject):
         self._service_cache = (0.0, set())
         self.anchor_resolver = AnchorResolver()
         self.selection_context = SelectionContext(text="")
+        self._selection_session = 0
         self.monitor = (
             WaylandSelectionMonitor(self.settings)
             if is_qt_wayland()
             else X11SelectionMonitor(self.settings)
         )
-        self.monitor.selection_changed.connect(self.show_popup)
-        self.monitor.selection_cleared.connect(self.hide_popup)
+        self.monitor.selection_changed.connect(self._monitor_selection_changed)
+        self.monitor.selection_cleared.connect(self._monitor_selection_cleared)
 
         self.popup = PopupWindow(self.actions, self.monitor, self.settings)
         self.popup.action_triggered.connect(self.execute_action)
@@ -3169,7 +3224,7 @@ class TextPikApp(QObject):
         self.popup.suppress_app_requested.connect(self.block_application)
         self.popup.interaction_started.connect(self.popup_state.interacting)
         self.popup.interaction_finished.connect(self._finish_popup_interaction)
-        self.popup.dismissed.connect(self.popup_state.reset)
+        self.popup.dismissed.connect(self._on_popup_dismissed)
         self.pointer = X11Pointer()
         self.process_filter = ProcessFilter(self.settings)
         self._animating = False
@@ -3382,10 +3437,31 @@ class TextPikApp(QObject):
         self._service_cache = (0.0, self._service_cache[1])
         self._desktop_dbus_services()
 
+    def _begin_selection_session(self, source):
+        self._selection_session += 1
+        logger.debug(
+            "Sesión de selección %d iniciada por %s",
+            self._selection_session,
+            source,
+        )
+        return self._selection_session
+
+    def _selection_session_is_current(self, session_id):
+        return session_id == self._selection_session
+
+    def _monitor_selection_changed(self):
+        session_id = self._begin_selection_session("clipboard")
+        self.show_popup(session_id=session_id)
+
+    def _monitor_selection_cleared(self):
+        self._begin_selection_session("clipboard-cleared")
+        self.hide_popup(invalidate_session=False)
+
     def _queue_atspi_selection(self, node):
         if not self.monitor._active or self.popup.is_interacting():
             return
-        self._pending_atspi_node = node
+        session_id = self._begin_selection_session("atspi-event")
+        self._pending_atspi_node = (node, session_id)
         # Accessibility events can arrive before the final range is committed.
         self.popup_state.transition(PopupPhase.STABILIZING)
         self.atspi_event_timer.start(max(45, self.settings.get("popup_delay_ms", 0)))
@@ -3400,17 +3476,25 @@ class TextPikApp(QObject):
         if self.monitor._primary_button_pressed():
             self.atspi_event_timer.start(45)
             return
-        node, self._pending_atspi_node = self._pending_atspi_node, None
+        pending, self._pending_atspi_node = self._pending_atspi_node, None
+        if pending is None:
+            return
+        node, session_id = pending
+        if not self._selection_session_is_current(session_id):
+            logger.debug("Evento AT-SPI obsoleto descartado: %s", session_id)
+            return
         context = self.atspi.read_selection(node)
+        if not self._selection_session_is_current(session_id):
+            return
         if context is None or not context.text.strip():
-            self.hide_popup()
+            self.hide_popup(invalidate_session=False)
             return
         if len(context.text.strip()) > self.settings.get("max_selection_length", 5000):
-            self.hide_popup()
+            self.hide_popup(invalidate_session=False)
             return
         self.selection_context = context
         self.monitor._last_text = context.text.strip()
-        self.show_popup(context=context)
+        self.show_popup(context=context, session_id=session_id)
 
     def hotkey_triggered(self):
         if self.popup.isVisible():
@@ -3579,7 +3663,13 @@ class TextPikApp(QObject):
             self.popup.setWindowOpacity(target)
             self._animating = False
 
-    def hide_popup(self):
+    def _on_popup_dismissed(self):
+        self._begin_selection_session("popup-dismissed")
+        self.popup_state.reset()
+
+    def hide_popup(self, invalidate_session=True):
+        if invalidate_session:
+            self._begin_selection_session("popup-hidden")
         self.hide_check_timer.stop()
         self.auto_hide_timer.stop()
         self._popup_immunity_until = 0.0
@@ -3592,6 +3682,10 @@ class TextPikApp(QObject):
                 self._animating = False
                 self.popup.hide()
         self.popup_state.reset()
+
+    def _suppress_popup(self, reason):
+        self.hide_popup(invalidate_session=False)
+        self.popup_state.suppress(reason)
 
     def update_settings(self, settings):
         hotkey_was_enabled = self.settings.get("enable_global_hotkey", False)
@@ -3724,23 +3818,33 @@ class TextPikApp(QObject):
             0.72 if not is_qt_wayland() else 0.2,
         )
 
-    def show_popup(self, force=False, context=None):
+    def show_popup(self, force=False, context=None, session_id=None):
+        if session_id is None:
+            session_id = self._begin_selection_session(
+                "manual" if force else "selection"
+            )
+        elif not self._selection_session_is_current(session_id):
+            logger.debug("Solicitud de popup obsoleta descartada: %s", session_id)
+            return
         if not force and not self.monitor._active:
             return
         if not force and not self.settings.get("show_on_selection", True):
             return
         if not force and self._runtime_snapshot.get("game", False):
             logger.info("Popup omitido por filtro anti-juegos")
-            self.popup_state.suppress("game")
+            self._suppress_popup("game")
             return
         if not force and self._runtime_snapshot.get("activity_blocked", False):
             logger.info("Popup omitido por filtro de actividades")
-            self.popup_state.suppress("activity")
+            self._suppress_popup("activity")
             return
         text = self.monitor.get_last_text().strip()
         atspi_context = context or (
             self.atspi.read_selection() if self.atspi.available else None
         )
+        if not self._selection_session_is_current(session_id):
+            logger.debug("Lectura AT-SPI obsoleta descartada: %s", session_id)
+            return
         if atspi_context and atspi_context.sensitive:
             self.selection_context = atspi_context
         elif atspi_context and (not text or atspi_context.text.strip() == text):
@@ -3759,27 +3863,27 @@ class TextPikApp(QObject):
             )
         ):
             logger.info("Popup omitido por filtro de aplicaciones")
-            self.popup_state.suppress("application")
+            self._suppress_popup("application")
             return
-        if (
-            not force
-            and self.settings.get("disable_in_sensitive_fields", True)
-            and self.selection_context.sensitive
-        ):
-            logger.info("Popup omitido en campo sensible detectado mediante AT-SPI")
-            self.popup_state.suppress("sensitive")
-            return
-        if (
-            not force
-            and self.settings.get("ignore_file_selections", True)
-            and is_file_workspace_selection(self.selection_context, text)
-        ):
+        intent = evaluate_selection_intent(
+            self.selection_context,
+            text,
+            ignore_files=(
+                not force and self.settings.get("ignore_file_selections", True)
+            ),
+            reject_sensitive=(
+                not force
+                and self.settings.get("disable_in_sensitive_fields", True)
+            ),
+        )
+        if not intent.allowed:
             logger.info(
-                "Popup omitido para elemento de archivo: app=%s role=%s",
+                "Popup omitido por intención %s: app=%s role=%s",
+                intent.reason,
                 self.selection_context.application,
                 self.selection_context.role,
             )
-            self.popup_state.suppress("file-selection")
+            self._suppress_popup(intent.reason)
             return
         if text:
             now = time.monotonic()
@@ -3819,7 +3923,7 @@ class TextPikApp(QObject):
                     ]
             if not visible:
                 logger.info("Popup omitido: no hay acciones habilitadas")
-                self.popup_state.suppress("no-actions")
+                self._suppress_popup("no-actions")
                 return
             self.popup.set_context(self.selection_context)
             self.popup.set_actions(visible)
@@ -3831,6 +3935,8 @@ class TextPikApp(QObject):
                     pointer_anchor,
                 )
             )
+            if not self._selection_session_is_current(session_id):
+                return
             self.popup.show_at_cursor(anchor, self.selection_context.selection_rect)
             self.popup_state.visible()
             self._animate_popup_fade_in()
@@ -3863,6 +3969,7 @@ class TextPikApp(QObject):
         if context is None:
             return
         if context.sensitive:
+            self._begin_selection_session("atspi-sensitive")
             self.selection_context = context
             self.hide_popup()
             return
@@ -3878,9 +3985,10 @@ class TextPikApp(QObject):
         self._last_atspi_signature = signature
         if len(text) > self.settings.get("max_selection_length", 5000):
             return
+        session_id = self._begin_selection_session("atspi-poll")
         self.selection_context = context
         self.monitor._last_text = text
-        self.show_popup(context=context)
+        self.show_popup(context=context, session_id=session_id)
 
     def _action_available(self, action):
         return self.action_integration_status(action).available
@@ -4504,6 +4612,41 @@ exec bash -i
 
         QTimer.singleShot(180 if is_qt_wayland() else 100, run_paste)
 
+    def diagnostic_report(self):
+        """Return a privacy-safe capability snapshot for support requests."""
+        services = self._desktop_dbus_services()
+        monitor_name = type(self.monitor).__name__
+        payload = {
+            "application": APP_NAME,
+            "qt_platform": self.app.platformName(),
+            "desktop": desktop_environment() or "unknown",
+            "selection_backend": monitor_name,
+            "atspi": self.atspi.available,
+            "atspi_events": bool(self.atspi_events_active),
+            "wl_clipboard": check_command("wl-paste"),
+            "paste_backend": next(
+                (
+                    name
+                    for name in ("wtype", "ydotool", "xdotool")
+                    if check_command(name)
+                ),
+                "clipboard-only",
+            ),
+            "klipper": "org.kde.klipper" in services,
+            "kdeconnect": (
+                check_command("kdeconnect-cli")
+                or "org.kde.kdeconnect" in services
+            ),
+            "selection_session": self._selection_session,
+            "popup_phase": self.popup_state.phase.value,
+            "popup_suppression_reason": self.popup_state.reason,
+        }
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+
+    def copy_diagnostic_report(self):
+        QApplication.clipboard().setText(self.diagnostic_report())
+        self._show_toast("Diagnóstico copiado sin contenido seleccionado")
+
     def create_tray_icon(self):
         self.tray = QSystemTrayIcon(self)
         icon = load_icon(TRAY_ICON_FILE, "edit-select-all")
@@ -4567,6 +4710,11 @@ exec bash -i
         view_log_action = QAction("Ver log...", self)
         view_log_action.triggered.connect(self.open_log_viewer)
         config_menu.addAction(view_log_action)
+
+        copy_diagnostics_action = QAction("Copiar diagnóstico", self)
+        copy_diagnostics_action.triggered.connect(self.copy_diagnostic_report)
+        config_menu.addAction(copy_diagnostics_action)
+
         open_log_action = QAction("Abrir archivo de log", self)
         open_log_action.triggered.connect(self.open_log_file)
         config_menu.addAction(open_log_action)

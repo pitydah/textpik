@@ -59,6 +59,34 @@ def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
     )
 
 
+def stabilize_popup_position(
+    candidate,
+    previous,
+    popup_size,
+    avoid_rect=None,
+    threshold=14,
+):
+    """Keep tiny anchor fluctuations from making a visible popup jitter."""
+    if previous is None:
+        return candidate
+    x, y = candidate
+    px, py = previous
+    if abs(x - px) > threshold or abs(y - py) > threshold:
+        return candidate
+    if avoid_rect:
+        width, height = popup_size
+        rx, ry, rw, rh = avoid_rect
+        overlaps = not (
+            px + width <= rx
+            or px >= rx + rw
+            or py + height <= ry
+            or py >= ry + rh
+        )
+        if overlaps:
+            return candidate
+    return previous
+
+
 class AnchorResolver:
     """Selects the freshest, most trustworthy anchor without desktop coupling."""
 

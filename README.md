@@ -28,8 +28,11 @@ copy, search, translate, open links, and more with one click.
 - KDE Plasma integration: Klipper D-Bus, KWin cursor bridge, system tray
 - Event-driven AT-SPI selection detection with a low-frequency compatibility
   fallback for applications that do not emit accessibility notifications
+- Revisioned selection sessions discard stale Wayland/AT-SPI results, while the
+  intent engine suppresses menus, file objects and TextPik's own interface
 - Wayland positioning via AT-SPI selection geometry, KWin, Hyprland and Sway;
-  slow compositor/process probes run outside the popup display path
+  slow compositor/process probes run outside the popup display path and position
+  hysteresis prevents small cursor changes from making the bar jitter
 - Text transformations replace editable selections through AT-SPI, with a safe
   clipboard fallback
 - Click-outside-to-close
