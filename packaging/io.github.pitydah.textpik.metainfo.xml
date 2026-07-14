@@ -22,8 +22,8 @@
     <category>Utility</category>
   </categories>
   <releases>
-    <release version="0.4.0" date="2026-07-13">
-      <description><p>Cross-desktop Wayland integration and premium popup redesign.</p></description>
+    <release version="0.4.0-rc.1" date="2026-07-13" type="development">
+      <description><p>Release candidate with crash-safe workers, intelligent selection sessions and cross-desktop Wayland integration.</p></description>
     </release>
   </releases>
   <content_rating type="oars-1.1"/>

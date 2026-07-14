@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install runtime and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
+          python -m pip install -e . build coverage ruff twine
+      - name: Verify tag and release metadata
+        run: python scripts/check_release.py --tag "$GITHUB_REF_NAME"
+      - name: Run release gates
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m unittest discover -s tests -v
+          ruff check src tests scripts
+          python -m coverage erase
+          python -m coverage run --branch --source=src/textpik_core -m unittest discover -s tests
+          python -m coverage report --fail-under=60
+      - name: Build and verify artifacts
+        run: |
+          python -m build
+          python -m twine check dist/*
+          cd dist
+          sha256sum * > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_args=()
+          case "$GITHUB_REF_NAME" in
+            *-rc.*|*-beta.*|*-alpha.*) release_args+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes \
+            --verify-tag \
+            "${release_args[@]}"

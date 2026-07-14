@@ -2,8 +2,9 @@
 # Contributor: pitydah <pitydah@github.com>
 
 pkgname=textpik
-pkgver=0.4.0
+pkgver=0.4.0rc1
 pkgrel=1
+_tag=0.4.0-rc.1
 pkgdesc="Cross-desktop popup action bar for selected text (Wayland + X11)"
 arch=('any')
 url="https://github.com/pitydah/textpik"
@@ -14,11 +15,11 @@ optdepends=('ydotool: auto-paste on Wayland'
             'konsole: terminal action'
             'cups: print action'
             'ollama: AI query action')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/pitydah/textpik/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$pkgver.tar.gz::https://github.com/pitydah/textpik/archive/refs/tags/v$_tag.tar.gz")
 sha256sums=('SKIP')
 
 package() {
-    cd "$srcdir/$pkgname-$pkgver"
+    cd "$srcdir/$pkgname-$_tag"
     install -Dm755 packaging/textpik "$pkgdir/usr/bin/textpik"
     install -Dm644 src/textpik.py "$pkgdir/usr/lib/textpik/textpik.py"
     cp -r src/textpik_core "$pkgdir/usr/lib/textpik/textpik_core"

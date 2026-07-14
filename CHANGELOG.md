@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.4.0-rc.1 — 2026-07-13
+
+### Estabilidad
+- Corregido el crash de arranque causado por referencias débiles incompatibles.
+- Ciclo de vida seguro para workers Qt durante ejecución y cierre.
+- Sesiones de selección versionadas que descartan resultados AT-SPI y Wayland obsoletos.
+- Protección de campos sensibles mediante el estado AT-SPI `PROTECTED`.
+
+### Comportamiento
+- Motor de intención para ignorar menús, controles y objetos de gestores de archivos.
+- Posicionamiento con histéresis para evitar vibraciones del popup.
+- Pegado sin sobrescribir el contenido existente del portapapeles.
+- Paleta de más acciones opaca, buscador difuso y reglas por aplicación.
+
+### Distribución
+- Recetas DEB, RPM, Arch, Flatpak y AppImage alineadas.
+- Matriz CI para Python 3.10–3.13, cobertura del núcleo y smoke test gráfico.
+- Automatización de releases con artefactos Python y checksums SHA-256.
+
 ## v0.3.0 — 2026-06-15 (Sprint 2 + pulido)
 
 ### Nuevas acciones

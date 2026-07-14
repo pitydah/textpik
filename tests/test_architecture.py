@@ -157,6 +157,86 @@ class ExtensionTest(unittest.TestCase):
 
 
 class AtspiTest(unittest.TestCase):
+    def test_reads_typed_selection_context(self):
+        class Rect:
+            x = 10
+            y = 20
+            width = 80
+            height = 18
+
+        class Text:
+            def get_selection(self, _index):
+                return 2, 7
+
+            def get_range_extents(self, _start, _end, _coord):
+                return Rect()
+
+            def get_text(self, start, end):
+                return "hello" if (start, end) == (2, 7) else ""
+
+        class Node:
+            def get_text_iface(self):
+                return Text()
+
+        class CoordType:
+            SCREEN = object()
+
+        class Atspi:
+            pass
+
+        Atspi.CoordType = CoordType
+        backend = AtspiSelectionBackend(atspi=Atspi())
+        node = Node()
+        with (
+            patch.object(backend, "_focused", return_value=node),
+            patch.object(backend, "_role_name", return_value="text entry"),
+            patch.object(backend, "_application_name", return_value="Editor"),
+            patch.object(backend, "_is_protected", return_value=False),
+            patch.object(backend, "_editable", return_value=object()),
+        ):
+            context = backend.read_selection(node)
+        self.assertEqual(context.text, "hello")
+        self.assertEqual(context.selection_rect, (10, 20, 80, 18))
+        self.assertEqual((context.anchor.x, context.anchor.y), (90, 38))
+        self.assertTrue(context.editable)
+
+    def test_never_reads_protected_text_contents(self):
+        class Rect:
+            x = y = width = height = 1
+
+        class Text:
+            def get_selection(self, _index):
+                return 0, 4
+
+            def get_range_extents(self, _start, _end, _coord):
+                return Rect()
+
+            def get_text(self, _start, _end):
+                raise AssertionError("protected text must not be read")
+
+        class Node:
+            def get_text_iface(self):
+                return Text()
+
+        class CoordType:
+            SCREEN = object()
+
+        class Atspi:
+            pass
+
+        Atspi.CoordType = CoordType
+        backend = AtspiSelectionBackend(atspi=Atspi())
+        node = Node()
+        with (
+            patch.object(backend, "_focused", return_value=node),
+            patch.object(backend, "_role_name", return_value="password text"),
+            patch.object(backend, "_application_name", return_value="Login"),
+            patch.object(backend, "_is_protected", return_value=True),
+        ):
+            context = backend.read_selection(node)
+        self.assertTrue(context.sensitive)
+        self.assertEqual(context.text, "")
+
     def test_replaces_selection_through_editable_interface(self):
         calls = []
 

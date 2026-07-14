@@ -2,6 +2,10 @@
 
 Popup action bar on text selection for Linux desktops (Wayland & X11).
 
+Development status: **0.4.0 RC1 candidate**. Promotion requirements are tracked
+in the [release checklist](docs/release-checklist.md). Security-sensitive reports
+must follow [SECURITY.md](SECURITY.md) instead of a public bug report.
+
 Select text anywhere and a customizable action bar appears at your cursor —
 copy, search, translate, open links, and more with one click.
 <p align="center">

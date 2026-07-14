@@ -1,10 +1,10 @@
 Name:           textpik
 Version:        0.4.0
-Release:        1%{?dist}
+Release:        0.rc1%{?dist}
 Summary:        Compact action bar for selected text
 License:        GPL-3.0-or-later
 URL:            https://github.com/pitydah/textpik
-Source0:        %{url}/archive/refs/tags/v%{version}.tar.gz
+Source0:        %{url}/archive/refs/tags/v0.4.0-rc.1.tar.gz
 BuildArch:      noarch
 BuildRequires:  python3-devel python3-pip pyproject-rpm-macros
 Requires:       python3-pyside6 python3-gobject at-spi2-core xdg-utils
@@ -14,7 +14,7 @@ Recommends:     wl-clipboard xdotool
 TextPik shows context-aware actions next to selected text on Linux desktops.
 
 %prep
-%autosetup
+%autosetup -n textpik-0.4.0-rc.1
 
 %build
 %pyproject_wheel
@@ -40,5 +40,5 @@ cp -a assets kwin %{buildroot}%{_datadir}/textpik/
 %{_datadir}/textpik/
 
 %changelog
-* Mon Jul 13 2026 TextPik contributors <pitydah@github.com> - 0.4.0-1
-- Cross-desktop Wayland selection and popup positioning release
+* Mon Jul 13 2026 TextPik contributors <pitydah@github.com> - 0.4.0-0.rc1
+- First release candidate with crash fixes and intelligent selection sessions

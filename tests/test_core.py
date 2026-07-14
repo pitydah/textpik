@@ -15,6 +15,7 @@ from src.textpik import (
     TextPikApp,
     FunctionWorker,
     build_command_argv,
+    clipboard_has_text,
     classify_text,
     desktop_environment,
     is_kde,
@@ -25,6 +26,10 @@ from src.textpik import (
 
 
 class CoreHelpersTest(unittest.TestCase):
+    def test_headless_clipboard_without_mime_data_is_empty(self):
+        clipboard = SimpleNamespace(mimeData=lambda: None)
+        self.assertFalse(clipboard_has_text(clipboard))
+
     def test_popup_hot_path_avoids_desktop_subprocess_probes(self):
         source = inspect.getsource(TextPikApp.show_popup)
         self.assertNotIn("hyprland_cursor_anchor(", source)

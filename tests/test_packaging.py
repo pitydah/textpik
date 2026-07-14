@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -43,6 +45,16 @@ class PackagingTest(unittest.TestCase):
         ).getroot()
         self.assertEqual(root.findtext("id"), "io.github.pitydah.textpik")
         self.assertEqual(root.find("provides/binary").text, "textpik")
+
+    def test_release_versions_are_consistent(self):
+        result = subprocess.run(
+            [sys.executable, "scripts/check_release.py"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
@@ -12,24 +19,43 @@ jobs:
         python: ["3.10", "3.11", "3.12", "3.13"]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
-      - run: pip install PySide6 ruff
+          cache: pip
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
+      - run: python -m pip install -e . ruff coverage build twine
       - run: python -m unittest discover -s tests -v
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python -m py_compile src/textpik.py src/textpik_core/*.py
-      - run: ruff check src tests --select E9,F63,F7,F82
-      - run: pip install build && python -m build
+      - run: ruff check src tests scripts
+      - name: Enforce core coverage
+        if: matrix.python == '3.11'
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch --source=src/textpik_core -m unittest discover -s tests
+          python -m coverage report --fail-under=60
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Build and inspect Python artifacts
+        if: matrix.python == '3.11'
+        run: |
+          python scripts/check_release.py
+          python -m build
+          python -m twine check dist/*
 
   packaging:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - run: sudo apt-get update && sudo apt-get install -y appstream desktop-file-utils
       - run: desktop-file-validate packaging/textpik.desktop
       - run: appstreamcli validate --no-net packaging/io.github.pitydah.textpik.metainfo.xml
       - run: bash -n packaging/install.sh packaging/run.sh packaging/appimage/build.sh
       - run: python -m json.tool packaging/flatpak/io.github.pitydah.textpik.json >/dev/null
+      - run: python scripts/check_release.py

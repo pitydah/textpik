@@ -1,0 +1,12 @@
+[run]
+branch = True
+source =
+    src/textpik_core
+
+[report]
+fail_under = 60
+show_missing = True
+skip_covered = True
+exclude_also =
+    if TYPE_CHECKING:
+    raise NotImplementedError

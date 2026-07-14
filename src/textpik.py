@@ -110,6 +110,16 @@ def check_command(cmd):
     return shutil.which(cmd) is not None
 
 
+def clipboard_has_text(clipboard=None):
+    """Handle headless and initializing clipboard backends safely."""
+    try:
+        clipboard = clipboard or QApplication.clipboard()
+        mime_data = clipboard.mimeData() if clipboard is not None else None
+        return bool(mime_data is not None and mime_data.hasText())
+    except RuntimeError:
+        return False
+
+
 def check_python_module(module):
     try:
         __import__(module)
@@ -211,6 +221,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 
 APP_NAME = "textpik"
+APP_VERSION = "0.4.0-rc.1"
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
 _RUNTIME_ROOTS = [
     Path(getattr(sys, "_MEIPASS", _SOURCE_ROOT)),
@@ -3910,7 +3921,7 @@ class TextPikApp(QObject):
                 for action in self.actions
                 if action.get("enabled", True) and self._action_available(action)
             ]
-            if not QApplication.clipboard().mimeData().hasText():
+            if not clipboard_has_text():
                 visible = [action for action in visible if action.get("cmd") != "paste"]
             if self.settings.get("context_aware", True) and text:
                 text_types = self._detect_text_type(text)
@@ -4584,7 +4595,7 @@ exec bash -i
 
     def paste_clipboard(self):
         clipboard = QApplication.clipboard()
-        if not clipboard.mimeData().hasText():
+        if not clipboard_has_text(clipboard):
             self._show_toast("El portapapeles no contiene texto")
             return
 
@@ -4618,6 +4629,7 @@ exec bash -i
         monitor_name = type(self.monitor).__name__
         payload = {
             "application": APP_NAME,
+            "application_version": APP_VERSION,
             "qt_platform": self.app.platformName(),
             "desktop": desktop_environment() or "unknown",
             "selection_backend": monitor_name,
