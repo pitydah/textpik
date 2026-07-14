@@ -53,9 +53,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - run: sudo apt-get update && sudo apt-get install -y appstream desktop-file-utils
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils build-essential \
+            debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools
       - run: desktop-file-validate packaging/textpik.desktop
       - run: appstreamcli validate --no-net packaging/io.github.pitydah.textpik.metainfo.xml
-      - run: bash -n packaging/install.sh packaging/run.sh packaging/appimage/build.sh
+      - run: bash -n packaging/install.sh packaging/run.sh packaging/appimage/build.sh packaging/debian/build.sh packaging/rpm/build.sh
       - run: python -m json.tool packaging/flatpak/io.github.pitydah.textpik.json >/dev/null
       - run: python scripts/check_release.py
+      - name: Build and inspect Debian package
+        run: |
+          packaging/debian/build.sh
+          dpkg-deb --info dist/textpik_*_all.deb
+          dpkg-deb --contents dist/textpik_*_all.deb | grep -q './usr/bin/textpik'
+      - name: Build and inspect Fedora packages
+        run: |
+          docker run --rm -v "$PWD:/source" -w /source fedora:latest bash -lc '
+            dnf install -y -q git rpm-build python3-devel python3-pip pyproject-rpm-macros python3-setuptools
+            git config --global --add safe.directory /source
+            packaging/rpm/build.sh
+            rpm -qpi dist/textpik-*.noarch.rpm
+            rpm -qlp dist/textpik-*.noarch.rpm | grep -q /usr/bin/textpik
+          '

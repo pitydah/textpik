@@ -20,7 +20,9 @@ jobs:
       - name: Install runtime and build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 \
+            build-essential debhelper dh-python pybuild-plugin-pyproject \
+            python3-all python3-setuptools
           python -m pip install -e . build coverage ruff twine
       - name: Verify tag and release metadata
         run: python scripts/check_release.py --tag "$GITHUB_REF_NAME"
@@ -37,6 +39,12 @@ jobs:
         run: |
           python -m build
           python -m twine check dist/*
+          packaging/debian/build.sh
+          docker run --rm -v "$PWD:/source" -w /source fedora:latest bash -lc '
+            dnf install -y -q git rpm-build python3-devel python3-pip pyproject-rpm-macros python3-setuptools
+            git config --global --add safe.directory /source
+            packaging/rpm/build.sh
+          '
           cd dist
           sha256sum * > SHA256SUMS
           sha256sum --check SHA256SUMS

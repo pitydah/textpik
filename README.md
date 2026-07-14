@@ -133,8 +133,10 @@ monitoring uses X11 PRIMARY or the standard Wayland `wl-clipboard` protocol.
   Ubuntu, Fedora, CentOS, openSUSE, Alpine, Void and Slackware. Files are copied to
   `~/.local/share/textpik`, so the original checkout can be moved or deleted.
 - `packaging/arch/PKGBUILD`: native Arch package with optional integrations.
-- `packaging/debian`: Debian/Ubuntu source package metadata.
-- `packaging/rpm/textpik.spec`: Fedora/RHEL-family RPM recipe.
+- `packaging/debian`: Debian/Ubuntu source package metadata. Build it with
+  `packaging/debian/build.sh`; resulting packages are written to `dist/`.
+- `packaging/rpm/textpik.spec`: Fedora/RHEL-family RPM recipe. Build it from a
+  committed tree with `packaging/rpm/build.sh`; packages are written to `dist/`.
 - `packaging/io.github.pitydah.textpik.metainfo.xml`: AppStream metadata used
   by software centers and native packages.
 - `packaging/flatpak/io.github.pitydah.textpik.json`: KDE/PySide Flatpak

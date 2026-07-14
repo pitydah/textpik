@@ -21,23 +21,23 @@ TextPik shows context-aware actions next to selected text on Linux desktops.
 
 %install
 %pyproject_install
+%pyproject_save_files textpik_core
 install -Dm644 packaging/textpik.desktop %{buildroot}%{_datadir}/applications/textpik.desktop
 install -Dm644 assets/app/textpik.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/textpik.svg
 install -Dm644 packaging/io.github.pitydah.textpik.metainfo.xml %{buildroot}%{_metainfodir}/io.github.pitydah.textpik.metainfo.xml
 mkdir -p %{buildroot}%{_datadir}/textpik
 cp -a assets kwin %{buildroot}%{_datadir}/textpik/
 
-%files
+%files -f %{pyproject_files}
 %license LICENSE
-%doc README.md
 %{_bindir}/textpik
 %{python3_sitelib}/textpik.py
-%{python3_sitelib}/textpik_core/
-%{python3_sitelib}/textpik-*.dist-info/
+%{python3_sitelib}/__pycache__/textpik.cpython-*.pyc
 %{_datadir}/applications/textpik.desktop
 %{_datadir}/icons/hicolor/scalable/apps/textpik.svg
 %{_metainfodir}/io.github.pitydah.textpik.metainfo.xml
 %{_datadir}/textpik/
+%{_docdir}/textpik/
 
 %changelog
 * Mon Jul 13 2026 TextPik contributors <pitydah@github.com> - 0.4.0-0.rc1
