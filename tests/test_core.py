@@ -12,6 +12,9 @@ from PySide6.QtWidgets import QApplication
 from src.textpik import (
     ActionPalette,
     BaseSelectionMonitor,
+    DEFAULT_ACTIONS,
+    DEFAULT_SETTINGS,
+    PopupWindow,
     TextPikApp,
     FunctionWorker,
     build_command_argv,
@@ -47,7 +50,7 @@ class CoreHelpersTest(unittest.TestCase):
             normalize_settings({"max_popup_actions": 1})["max_popup_actions"], 3
         )
         self.assertEqual(
-            normalize_settings({"max_popup_actions": 99})["max_popup_actions"], 20
+            normalize_settings({"max_popup_actions": 99})["max_popup_actions"], 40
         )
 
     def test_url_detection_accepts_bare_domains(self):
@@ -216,6 +219,50 @@ class PopupCompositionTest(unittest.TestCase):
         palette.hide()
         self.assertEqual(center.alpha(), 255)
         self.assertGreater(center.lightness(), 0)
+
+    def test_popup_theme_does_not_compact_palette_controls(self):
+        popup = PopupWindow(DEFAULT_ACTIONS, None, dict(DEFAULT_SETTINGS))
+        popup.show()
+        self.app.processEvents()
+        popup._open_palette(DEFAULT_ACTIONS, popup._action_buttons[-1])
+        self.app.processEvents()
+        self.assertGreater(popup.palette.pin.width(), 100)
+        self.assertGreater(
+            popup.palette.pin.width(), popup._action_buttons[0].width()
+        )
+        popup.palette.hide()
+        popup.hide()
+
+    def test_visible_limit_counts_direct_actions_not_more_button(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["max_popup_actions"] = 12
+        actions = DEFAULT_ACTIONS[:15]
+        popup = PopupWindow(actions, None, settings)
+        popup.show()
+        self.app.processEvents()
+
+        self.assertEqual(len(popup.visible_actions), 12)
+        self.assertEqual(len(popup._action_buttons), 12)
+        self.assertIsNotNone(popup._more_button)
+        popup._more_button.click()
+        self.app.processEvents()
+        self.assertEqual(popup.palette.list.count(), 3)
+
+        popup.palette.hide()
+        popup.hide()
+
+    def test_show_all_mode_places_every_action_on_the_bar(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["show_all_popup_actions"] = True
+        actions = DEFAULT_ACTIONS[:15]
+        popup = PopupWindow(actions, None, settings)
+        popup.show()
+        self.app.processEvents()
+
+        self.assertEqual(len(popup.visible_actions), len(actions))
+        self.assertEqual(len(popup._action_buttons), len(actions))
+        self.assertIsNone(popup._more_button)
+        popup.hide()
 
 
 if __name__ == "__main__":

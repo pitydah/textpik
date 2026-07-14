@@ -13,6 +13,8 @@
 - Posicionamiento con histéresis para evitar vibraciones del popup.
 - Pegado sin sobrescribir el contenido existente del portapapeles.
 - Paleta de más acciones opaca, buscador difuso y reglas por aplicación.
+- Barra expandible con 3–40 iconos directos, modo para mostrar todas las acciones
+  y orden libre mediante arrastrar y soltar; la paleta contiene solo el excedente.
 
 ### Distribución
 - Recetas DEB, RPM, Arch, Flatpak y AppImage alineadas.

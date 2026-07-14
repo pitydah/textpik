@@ -18,11 +18,12 @@ copy, search, translate, open links, and more with one click.
   terminal, print, Ollama, KDE Connect and Klipper
 - Context-aware filtering for URLs, email, code, numbers and regular text,
   while preserving the user's fixed order
-- Compact popup plus fuzzy-searchable “More actions” palette with pinning and
-  one-click per-application exclusion
+- Expandable popup with a user-defined number of direct actions, optional
+  “show all” mode and drag-and-drop ordering; “More actions” contains only the
+  real overflow and remains fuzzy-searchable
 - Smart placement beside the pointer without covering the selected text,
   right-click suppression and optional inactivity auto-hide
-- Configurable icon size, bar padding, spacing, visible-action count and cursor gap
+- Configurable icon size, bar padding, spacing, 3–40 direct actions and cursor gap
 - File-manager awareness: file objects are ignored while text fields still work
 - Native desktop identity, XDG autostart management, AppStream metadata and
   system-tray active/paused status

@@ -193,6 +193,7 @@ from PySide6.QtGui import (  # noqa: E402
     QPixmap,
 )
 from PySide6.QtWidgets import (  # noqa: E402
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QColorDialog,
@@ -253,13 +254,14 @@ EXTENSIONS_DIR = Path.home() / ".local" / "share" / APP_NAME / "extensions"
 LOG_FILE = CACHE_DIR / "textpik.log"
 
 DEFAULT_SETTINGS = {
-    "ui_version": 2,
+    "ui_version": 3,
     "show_on_selection": True,
     "start_at_login": True,
     "popup_delay_ms": 0,
     "popup_auto_hide_ms": 5000,
     "max_selection_length": 5000,
     "max_popup_actions": 8,
+    "show_all_popup_actions": False,
     "confirm_terminal_execution": True,
     "context_aware": True,
     "sticky_popup": False,
@@ -267,17 +269,17 @@ DEFAULT_SETTINGS = {
     "enable_global_hotkey": False,
     "enable_wayland_polling": True,
     "log_enabled": True,
-    "popup_background_color": "#202124",
-    "popup_button_color": "#202124",
-    "popup_hover_color": "#35363a",
-    "popup_border_color": "#45474c",
-    "popup_button_border_color": "#202124",
-    "popup_icon_size": 18,
+    "popup_background_color": "#18181b",
+    "popup_button_color": "#18181b",
+    "popup_hover_color": "#2a2a2f",
+    "popup_border_color": "#3f3f46",
+    "popup_button_border_color": "#18181b",
+    "popup_icon_size": 17,
     "popup_button_padding": 4,
-    "popup_spacing": 1,
+    "popup_spacing": 2,
     "popup_cursor_gap": 6,
-    "popup_border_radius": 13,
-    "popup_opacity": 0.98,
+    "popup_border_radius": 12,
+    "popup_opacity": 0.99,
     "popup_wayland_fallback_top": 96,
     "popup_wayland_fallback_horizontal": "center",
     "disable_in_games": False,
@@ -467,19 +469,29 @@ def normalize_bool(value, fallback=False):
 def normalize_settings(settings):
     if not isinstance(settings, dict):
         settings = {}
-    legacy_ui = "ui_version" not in settings
+    try:
+        ui_version = int(settings.get("ui_version", 0))
+    except (TypeError, ValueError):
+        ui_version = 0
     normalized = dict(DEFAULT_SETTINGS)
     for key in DEFAULT_SETTINGS:
         if key in settings:
             normalized[key] = settings[key]
 
-    # Migración única desde la barra antigua de botones cuadrados. Conserva
-    # el color de la superficie, pero adopta dimensiones compactas.
-    if legacy_ui:
-        normalized["ui_version"] = 2
-        normalized["popup_icon_size"] = 18
-        normalized["popup_border_radius"] = 13
-        normalized["popup_opacity"] = 0.98
+    # La v3 unifica la grilla óptica y refina la superficie sin sobrescribir
+    # colores personalizados. Solo migra valores que aún son los defaults v2.
+    if ui_version < 3:
+        normalized["ui_version"] = 3
+        if normalized.get("popup_icon_size") == 18:
+            normalized["popup_icon_size"] = 17
+        if normalized.get("popup_border_radius") == 13:
+            normalized["popup_border_radius"] = 12
+        if normalized.get("popup_spacing") == 1:
+            normalized["popup_spacing"] = 2
+        if normalized.get("popup_background_color") == "#202124":
+            normalized["popup_background_color"] = "#18181b"
+        if normalized.get("popup_border_color") == "#45474c":
+            normalized["popup_border_color"] = "#3f3f46"
 
     try:
         normalized["popup_delay_ms"] = max(0, int(normalized["popup_delay_ms"]))
@@ -502,7 +514,7 @@ def normalize_settings(settings):
 
     try:
         normalized["max_popup_actions"] = min(
-            20, max(3, int(normalized["max_popup_actions"]))
+            40, max(3, int(normalized["max_popup_actions"]))
         )
     except (TypeError, ValueError):
         normalized["max_popup_actions"] = DEFAULT_SETTINGS["max_popup_actions"]
@@ -563,6 +575,7 @@ def normalize_settings(settings):
         "context_aware",
         "sticky_popup",
         "show_numeric_badges",
+        "show_all_popup_actions",
         "enable_global_hotkey",
         "disable_in_sensitive_fields",
         "ignore_file_selections",
@@ -595,16 +608,16 @@ def normalize_settings(settings):
         normalized["theme_preset"] = "custom"
     theme_presets = {
         "light": {
-            "popup_background_color": "#f7f7f7",
-            "popup_border_color": "#d0d0d0",
+            "popup_background_color": "#fafafa",
+            "popup_border_color": "#d4d4d8",
         },
         "dark": {
-            "popup_background_color": "#2d2d2d",
-            "popup_border_color": "#555555",
+            "popup_background_color": "#18181b",
+            "popup_border_color": "#3f3f46",
         },
         "oled": {
-            "popup_background_color": "#000000",
-            "popup_border_color": "#333333",
+            "popup_background_color": "#09090b",
+            "popup_border_color": "#27272a",
         },
     }
     preset = normalized.get("theme_preset")
@@ -1539,9 +1552,9 @@ class MoreActionsButton(QPushButton):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(Qt.NoPen)
         painter.setBrush(self.dot_color)
-        radius = max(1.5, self.width() / 15)
+        radius = max(1.35, self.width() / 17)
         center_y = self.height() / 2
-        separation = radius * 3.1
+        separation = radius * 3.25
         center_x = self.width() / 2
         for offset in (-separation, 0, separation):
             painter.drawEllipse(
@@ -1566,8 +1579,8 @@ class ActionPalette(QWidget):
         self.setObjectName("textpikActionPalette")
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setWindowOpacity(1.0)
-        self.setMinimumWidth(270)
-        self.resize(300, 330)
+        self.setMinimumWidth(300)
+        self.resize(324, 360)
         self._actions = []
         self._surface = QColor("#25262a")
         self._border = QColor("#45474c")
@@ -1575,23 +1588,33 @@ class ActionPalette(QWidget):
         self._application = ""
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(9, 9, 9, 9)
-        layout.setSpacing(7)
-        self.title = QLabel("Más acciones", self)
+        layout.setContentsMargins(12, 11, 12, 12)
+        layout.setSpacing(8)
+        self.title = QLabel("Acciones", self)
         self.title.setObjectName("paletteTitle")
+        self.subtitle = QLabel("", self)
+        self.subtitle.setObjectName("paletteSubtitle")
         self.search = QLineEdit(self)
-        self.search.setPlaceholderText("Buscar una acción…")
+        self.search.setPlaceholderText("Buscar acciones…")
         self.search.setClearButtonEnabled(True)
         self.list = QListWidget(self)
         self.list.setUniformItemSizes(True)
-        self.list.setIconSize(QSize(18, 18))
-        self.pin = QPushButton("Fijar en la barra", self)
-        self.suppress_app = QPushButton("No mostrar en esta aplicación", self)
+        self.list.setIconSize(QSize(17, 17))
+        self.list.setMinimumHeight(150)
+        self.pin = QPushButton("Fijar", self)
+        self.pin.setObjectName("primaryAction")
+        self.suppress_app = QPushButton("Ocultar aquí", self)
+        self.suppress_app.setObjectName("secondaryAction")
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(7)
+        footer.addWidget(self.pin, 1)
+        footer.addWidget(self.suppress_app, 1)
         layout.addWidget(self.title)
+        layout.addWidget(self.subtitle)
         layout.addWidget(self.search)
         layout.addWidget(self.list, 1)
-        layout.addWidget(self.pin)
-        layout.addWidget(self.suppress_app)
+        layout.addLayout(footer)
         self.search.textChanged.connect(self._filter)
         self.search.returnPressed.connect(self._activate_current)
         self.list.itemActivated.connect(self._activate)
@@ -1601,27 +1624,35 @@ class ActionPalette(QWidget):
 
     def apply_theme(self, settings):
         dark = color_luminance(settings["popup_background_color"]) < 0.5
-        bg, fg = ("#25262a", "#f5f6f7") if dark else ("#ffffff", "#202124")
-        field = "#32343a" if dark else "#f1f3f6"
-        hover = "#3c3f46" if dark else "#e7ebf2"
-        scroll_track = "#202125" if dark else "#eef0f3"
-        scroll_thumb = "#5c6069" if dark else "#b9bec7"
+        bg, fg = ("#1c1c20", "#fafafa") if dark else ("#ffffff", "#18181b")
+        muted = "#a1a1aa" if dark else "#71717a"
+        field = "#28282e" if dark else "#f4f4f5"
+        hover = "#303037" if dark else "#ececee"
+        press = "#3a3a42" if dark else "#e4e4e7"
+        scroll_track = "transparent"
+        scroll_thumb = "#52525b" if dark else "#c4c4ca"
         self._surface = QColor(bg)
         self._border = QColor(settings["popup_border_color"])
         self._foreground = QColor(fg)
         self.setStyleSheet(
             f"""
             QWidget#textpikActionPalette {{ background: transparent; color: {fg}; }}
-            QLabel#paletteTitle {{ color: {fg}; font-size: 13px; font-weight: 650;
-                padding: 2px 4px; }}
-            QLineEdit {{ background: {field}; color: {fg}; border: none;
-                border-radius: 9px; padding: 8px 10px; }}
+            QLabel#paletteTitle {{ color: {fg}; font-size: 14px; font-weight: 700;
+                padding: 1px 3px 0 3px; }}
+            QLabel#paletteSubtitle {{ color: {muted}; font-size: 10px;
+                padding: 0 3px 2px 3px; }}
+            QLineEdit {{ background: {field}; color: {fg}; border: 1px solid transparent;
+                border-radius: 10px; padding: 8px 10px; selection-background-color: {press}; }}
+            QLineEdit:focus {{ border-color: {scroll_thumb}; }}
             QListWidget {{ background: transparent; color: {fg}; border: none; outline: none; }}
-            QListWidget::item {{ padding: 7px 6px; border-radius: 8px; }}
+            QListWidget::item {{ padding: 8px 8px; margin: 1px 0; border-radius: 9px; }}
             QListWidget::item:selected, QListWidget::item:hover {{ background: {hover}; }}
             QPushButton {{ background: {field}; color: {fg}; border: none;
-                border-radius: 8px; padding: 7px; }}
+                border-radius: 9px; padding: 7px 12px; min-height: 18px; }}
             QPushButton:hover {{ background: {hover}; }}
+            QPushButton:pressed {{ background: {press}; }}
+            QPushButton#primaryAction {{ font-weight: 650; }}
+            QPushButton#secondaryAction {{ color: {muted}; }}
             QScrollBar:vertical {{ background: {scroll_track}; width: 7px;
                 margin: 2px 0; border: none; border-radius: 3px; }}
             QScrollBar::handle:vertical {{ background: {scroll_thumb};
@@ -1639,18 +1670,21 @@ class ActionPalette(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
         path = QPainterPath()
-        path.addRoundedRect(rect, 13, 13)
+        path.addRoundedRect(rect, 14, 14)
         painter.fillPath(path, self._surface)
         painter.setPen(QPen(self._border, 1))
         painter.drawPath(path)
         # Subtle top highlight keeps the surface defined on dark themes.
-        highlight = QColor(255, 255, 255, 24)
+        highlight = QColor(255, 255, 255, 20)
         painter.setPen(QPen(highlight, 1))
         painter.drawLine(13, 1, max(13, self.width() - 13), 1)
         super().paintEvent(event)
 
     def open_for(self, actions, origin, settings, application=""):
         self._actions = list(actions)
+        self.subtitle.setText(
+            f"{len(self._actions)} disponibles  ·  Enter para ejecutar  ·  Esc para cerrar"
+        )
         self._application = str(application or "").strip()
         self.suppress_app.setVisible(bool(self._application))
         if self._application:
@@ -1659,13 +1693,15 @@ class ActionPalette(QWidget):
                 if len(self._application) <= 32
                 else f"{self._application[:29]}…"
             )
-            self.suppress_app.setText(f"No mostrar en {compact_name}")
+            self.suppress_app.setText(f"Ocultar en {compact_name}")
             self.suppress_app.setToolTip(self._application)
         self.apply_theme(settings)
         self.search.clear()
         self._populate(self._actions)
-        desired_height = min(430, max(240, 150 + 39 * len(self._actions)))
-        self.resize(310, desired_height)
+        # 457 px deja exactamente ocho filas de 37 px con la escala estándar,
+        # evitando el aspecto de una novena fila accidentalmente recortada.
+        desired_height = min(457, max(280, 182 + 39 * len(self._actions)))
+        self.resize(324, desired_height)
         anchor_point = origin.mapToGlobal(QPoint(origin.width(), origin.height()))
         screen = QApplication.screenAt(anchor_point) or QApplication.primaryScreen()
         if screen:
@@ -1698,14 +1734,15 @@ class ActionPalette(QWidget):
     def _populate(self, actions):
         self.list.clear()
         for action in actions:
-            label = f"{action.get('category', 'General')}  ·  {action['name']}"
-            item = QListWidgetItem(label)
+            item = QListWidgetItem(action["name"])
+            category = action.get("category", "General")
+            item.setToolTip(f"{category} · {action['name']}")
             item.setData(Qt.UserRole, action["cmd"])
             item.setData(Qt.UserRole + 1, action.get("id", action["cmd"]))
             icon, needs_recolor = resolve_action_icon(action["icon"])
             if not icon.isNull():
                 if needs_recolor:
-                    icon = recolor_icon(icon, self._foreground, 18)
+                    icon = recolor_icon(icon, self._foreground, 17)
                 item.setIcon(icon)
             self.list.addItem(item)
         if self.list.count():
@@ -1766,6 +1803,7 @@ class PopupWindow(QWidget):
         self._actions_key = None
         self.visible_actions = []
         self._action_buttons = []
+        self._more_button = None
         self._keyboard_index = -1
         self._more_menu_open = False
         self._application = ""
@@ -1800,8 +1838,8 @@ class PopupWindow(QWidget):
 
         self.setWindowOpacity(self.settings["popup_opacity"])
         dark_surface = color_luminance(self.settings["popup_background_color"]) < 0.5
-        hover_overlay = "rgba(255,255,255,28)" if dark_surface else "rgba(0,0,0,20)"
-        press_overlay = "rgba(255,255,255,45)" if dark_surface else "rgba(0,0,0,38)"
+        hover_overlay = "rgba(255,255,255,24)" if dark_surface else "rgba(0,0,0,18)"
+        press_overlay = "rgba(255,255,255,39)" if dark_surface else "rgba(0,0,0,32)"
         self.setStyleSheet(
             f"""
             QPushButton {{
@@ -1820,12 +1858,19 @@ class PopupWindow(QWidget):
                 background-color: {press_overlay};
                 border: none;
             }}
+            QToolTip {{
+                background-color: {self.settings['popup_background_color']};
+                color: {self.icon_color.name()};
+                border: 1px solid {self.settings['popup_border_color']};
+                border-radius: 7px;
+                padding: 5px 7px;
+            }}
             """
         )
         self.update()
 
         variant = getattr(self, "icon_variant", None)
-        for button in self.findChildren(QPushButton):
+        for button in self._action_buttons:
             button.setFixedSize(button_size, button_size)
             button.setIconSize(QSize(icon_size, icon_size))
             icon_name = getattr(button, "source_icon_name", None)
@@ -1839,12 +1884,20 @@ class PopupWindow(QWidget):
                     button.setIcon(recolor_icon(icon, self.icon_color, icon_size))
                 else:
                     button.setIcon(icon)
+        if self._more_button is not None:
+            self._more_button.dot_color = QColor(self.icon_color)
+            self._more_button.setFixedSize(button_size, button_size)
+            self._more_button.update()
         self.adjustSize()
 
     def set_actions(self, actions):
+        screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        available_width = screen.availableGeometry().width() if screen else 1920
         actions_key = (
             self.settings.get("max_popup_actions", 8),
+            self.settings.get("show_all_popup_actions", False),
             self.settings.get("show_numeric_badges", False),
+            available_width,
             tuple(
                 (
                     action["name"],
@@ -1861,6 +1914,7 @@ class PopupWindow(QWidget):
         self._actions_key = actions_key
         self.actions = actions
         self._action_buttons = []
+        self._more_button = None
         self._keyboard_index = -1
         while self.buttons_layout.count():
             item = self.buttons_layout.takeAt(0)
@@ -1869,9 +1923,23 @@ class PopupWindow(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
 
-        limit = self.settings.get("max_popup_actions", 8)
-        has_overflow = len(self.actions) > limit
-        direct_count = limit - 1 if has_overflow else limit
+        icon_size = self.settings["popup_icon_size"]
+        button_size = icon_size + (self.settings["popup_button_padding"] * 2)
+        spacing = self.settings["popup_spacing"]
+        horizontal_margins = (self.settings["popup_button_padding"] + 1) * 2
+        slot_width = max(1, button_size + spacing)
+        screen_capacity = max(
+            4, (available_width - horizontal_margins - 32 + spacing) // slot_width
+        )
+        requested = (
+            len(self.actions)
+            if self.settings.get("show_all_popup_actions", False)
+            else self.settings.get("max_popup_actions", 8)
+        )
+        direct_count = min(len(self.actions), requested, screen_capacity)
+        has_overflow = len(self.actions) > direct_count
+        if has_overflow and direct_count >= screen_capacity:
+            direct_count = max(3, screen_capacity - 1)
         self.visible_actions = self.actions[:direct_count]
 
         variant = getattr(self, "icon_variant", None)
@@ -1891,9 +1959,8 @@ class PopupWindow(QWidget):
                 )
             else:
                 button.setIcon(icon)
-            button.setToolTip(f"{i + 1}: {action['name']}")
-            icon_size = self.settings["popup_icon_size"]
-            button_size = icon_size + (self.settings["popup_button_padding"] * 2)
+            shortcut = f"{i + 1}: " if i < 9 else ""
+            button.setToolTip(f"{shortcut}{action['name']}")
             button.setFixedSize(button_size, button_size)
             button.setIconSize(QSize(icon_size, icon_size))
             button.setFlat(True)
@@ -1905,7 +1972,7 @@ class PopupWindow(QWidget):
             )
             self.buttons_layout.addWidget(button)
             self._action_buttons.append(button)
-            if self.settings.get("show_numeric_badges", False):
+            if self.settings.get("show_numeric_badges", False) and i < 9:
                 badge = QLabel(str(i + 1), button)
                 badge.setStyleSheet(
                     "background: rgba(0,0,0,40); color: #888; "
@@ -1918,15 +1985,16 @@ class PopupWindow(QWidget):
                 badge.show()
 
         if has_overflow:
+            self.buttons_layout.addSpacing(2)
             more_button = MoreActionsButton(self.icon_color)
+            self._more_button = more_button
+            more_button.setObjectName("moreActions")
             more_button.setToolTip(f"Más acciones ({len(self.actions) - direct_count})")
             more_button.setFixedSize(button_size, button_size)
             more_button.setFlat(True)
             more_button.setFocusPolicy(Qt.NoFocus)
             more_button.setCursor(Qt.PointingHandCursor)
-            # The palette is both overflow and command finder: searching should
-            # always cover every available action, including direct buttons.
-            palette_actions = list(self.actions)
+            palette_actions = list(self.actions[direct_count:])
             more_button.clicked.connect(
                 lambda checked=False, values=palette_actions, button=more_button: self._open_palette(
                     values, button
@@ -1947,11 +2015,15 @@ class PopupWindow(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         background = QColor(self.settings["popup_background_color"])
         gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0.0, background.lighter(106))
-        gradient.setColorAt(1.0, background.darker(103))
+        gradient.setColorAt(0.0, background.lighter(103))
+        gradient.setColorAt(0.42, background)
+        gradient.setColorAt(1.0, background.darker(102))
         painter.fillPath(path, gradient)
         painter.setPen(QPen(QColor(self.settings["popup_border_color"]), 1))
         painter.drawPath(path)
+        top_glint = QColor(255, 255, 255, 18)
+        painter.setPen(QPen(top_glint, 1))
+        painter.drawLine(radius, 1, max(radius, self.width() - radius), 1)
         super().paintEvent(event)
 
     def _on_more_menu_opened(self):
@@ -2578,10 +2650,6 @@ class SettingsDialog(QDialog):
             1, 50000, int(self.settings["max_selection_length"])
         )
         beh_form.addRow("Tamano maximo de texto", self.max_selection)
-        self.max_popup_actions = self._spin(
-            3, 20, int(self.settings.get("max_popup_actions", 8))
-        )
-        beh_form.addRow("Acciones visibles", self.max_popup_actions)
         self.confirm_terminal = QCheckBox(
             "Confirmar antes de ejecutar en terminal", self
         )
@@ -2767,9 +2835,46 @@ class SettingsDialog(QDialog):
         # ── Pestaña 7: Acciones ──
         acttab = QWidget()
         acttab_layout = QVBoxLayout(acttab)
+        bar_group = QGroupBox("Composición de la barra")
+        bar_form = QFormLayout(bar_group)
+        self.show_all_popup_actions = QCheckBox(
+            "Mostrar todas las acciones activas directamente", self
+        )
+        self.show_all_popup_actions.setChecked(
+            bool(self.settings.get("show_all_popup_actions", False))
+        )
+        bar_form.addRow("Modo", self.show_all_popup_actions)
+        self.max_popup_actions = self._spin(
+            3, 40, int(self.settings.get("max_popup_actions", 8))
+        )
+        self.max_popup_actions.setSuffix(" iconos")
+        self.max_popup_actions.setEnabled(
+            not self.show_all_popup_actions.isChecked()
+        )
+        self.show_all_popup_actions.toggled.connect(
+            lambda checked: self.max_popup_actions.setEnabled(not checked)
+        )
+        bar_form.addRow("Iconos directos", self.max_popup_actions)
+        bar_note = QLabel(
+            "La barra puede crecer hasta el ancho disponible de la pantalla. "
+            "Más acciones contendrá únicamente el excedente real.",
+            self,
+        )
+        bar_note.setWordWrap(True)
+        bar_note.setObjectName("mutedText")
+        bar_form.addRow("", bar_note)
+        acttab_layout.addWidget(bar_group)
         self.action_list = QListWidget(self)
         self.action_list.setAlternatingRowColors(True)
         self.action_list.setMinimumHeight(160)
+        self.action_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.action_list.setDefaultDropAction(Qt.MoveAction)
+        self.action_list.setDragEnabled(True)
+        self.action_list.setAcceptDrops(True)
+        self.action_list.setDropIndicatorShown(True)
+        self.action_list.model().rowsMoved.connect(
+            lambda *_: QTimer.singleShot(0, self._sync_actions_from_list)
+        )
         self._populate_action_list()
         acttab_layout.addWidget(self.action_list)
         btns = QHBoxLayout()
@@ -2788,8 +2893,8 @@ class SettingsDialog(QDialog):
         btns.addStretch()
         acttab_layout.addLayout(btns)
         note = QLabel(
-            "Activa, agrega, edita y ordena las acciones que aparecerán en la barra. "
-            "Los iconos se adaptan automáticamente al tema.",
+            "Arrastra las acciones para distribuirlas en el orden exacto que quieras; "
+            "también puedes usar ↑ y ↓. Activa solo las que necesites.",
             self,
         )
         note.setWordWrap(True)
@@ -2983,7 +3088,7 @@ class SettingsDialog(QDialog):
                 else ("Disponible" if availability.available else "No disponible")
             )
             item = QListWidgetItem(f"{action['name']}   ·   {state}")
-            item.setData(Qt.UserRole, action)
+            item.setData(Qt.UserRole, dict(action))
             icon, needs_recolor = resolve_action_icon(action["icon"])
             if not icon.isNull():
                 if needs_recolor:
@@ -3006,22 +3111,24 @@ class SettingsDialog(QDialog):
             self.action_list.addItem(item)
 
     def _move_up(self):
+        self._sync_actions_from_list()
         row = self.action_list.currentRow()
         if row <= 0:
             return
         item = self.action_list.takeItem(row)
         self.action_list.insertItem(row - 1, item)
         self.action_list.setCurrentRow(row - 1)
-        self.actions.insert(row - 1, self.actions.pop(row))
+        self._sync_actions_from_list()
 
     def _move_down(self):
+        self._sync_actions_from_list()
         row = self.action_list.currentRow()
         if row < 0 or row >= self.action_list.count() - 1:
             return
         item = self.action_list.takeItem(row)
         self.action_list.insertItem(row + 1, item)
         self.action_list.setCurrentRow(row + 1)
-        self.actions.insert(row + 1, self.actions.pop(row))
+        self._sync_actions_from_list()
 
     def _add_action(self):
         self._sync_enabled_from_list()
@@ -3036,13 +3143,13 @@ class SettingsDialog(QDialog):
         self.action_list.setCurrentRow(self.action_list.count() - 1)
 
     def _edit_action(self):
+        self._sync_actions_from_list()
         row = self.action_list.currentRow()
         if row < 0 or row >= len(self.actions):
             QMessageBox.information(
                 self, "Editar accion", "Selecciona una accion primero."
             )
             return
-        self._sync_enabled_from_list()
         dialog = ActionEditDialog(dict(self.actions[row]), self)
         if dialog.exec() != QDialog.Accepted:
             return
@@ -3054,6 +3161,7 @@ class SettingsDialog(QDialog):
         self.action_list.setCurrentRow(row)
 
     def _delete_action(self):
+        self._sync_actions_from_list()
         row = self.action_list.currentRow()
         if row < 0 or row >= len(self.actions):
             QMessageBox.information(
@@ -3075,10 +3183,16 @@ class SettingsDialog(QDialog):
             self.action_list.setCurrentRow(min(row, self.action_list.count() - 1))
 
     def _sync_enabled_from_list(self):
+        self._sync_actions_from_list()
+
+    def _sync_actions_from_list(self):
+        ordered_actions = []
         for i in range(self.action_list.count()):
             item = self.action_list.item(i)
-            if i < len(self.actions):
-                self.actions[i]["enabled"] = item.checkState() == Qt.Checked
+            action = dict(item.data(Qt.UserRole) or {})
+            action["enabled"] = item.checkState() == Qt.Checked
+            ordered_actions.append(action)
+        self.actions = ordered_actions
 
     def collect_settings(self):
         self._sync_enabled_from_list()
@@ -3099,6 +3213,9 @@ class SettingsDialog(QDialog):
         )
         self.settings["max_selection_length"] = self.max_selection.value()
         self.settings["max_popup_actions"] = self.max_popup_actions.value()
+        self.settings["show_all_popup_actions"] = (
+            self.show_all_popup_actions.isChecked()
+        )
         self.settings["show_on_selection"] = self.show_on_selection.isChecked()
         self.settings["start_at_login"] = self.start_at_login.isChecked()
         self.settings["disable_in_games"] = self.disable_in_games.isChecked()
