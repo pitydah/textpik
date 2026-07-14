@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import unicodedata
 from pathlib import Path
 
 from .models import ActionOperation, ActionResultType
+from .storage import read_json, write_json_atomic
 
 TRANSFORMS = {"uppercase", "lowercase", "capitalize", "remove-breaks"}
 KNOWN_PERMISSIONS = {"clipboard", "network", "process", "filesystem", "accessibility"}
@@ -42,7 +42,7 @@ def infer_category(name: str, command: str) -> str:
     lowered = f"{name} {command}".casefold()
     if command in {"copy", "paste", "klipper-save", "klipper-menu"}:
         return "Portapapeles"
-    if command in TRANSFORMS or command in {"count"} or "diccionario" in lowered:
+    if command in TRANSFORMS or command in {"count", "spellcheck"} or "diccionario" in lowered:
         return "Texto"
     if command in {"terminal", "print"}:
         return "Sistema"
@@ -121,7 +121,7 @@ class PermissionStore:
         self.path = path
         self._grants: dict[str, list[str]] = {}
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = read_json(path)
             if isinstance(payload, dict):
                 self._grants = payload
         except (OSError, ValueError):
@@ -134,7 +134,8 @@ class PermissionStore:
         if permission not in KNOWN_PERMISSIONS:
             raise ValueError(permission)
         values = set(self._grants.get(action_id, []))
+        if permission in values:
+            return
         values.add(permission)
         self._grants[action_id] = sorted(values)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._grants, indent=2), encoding="utf-8")
+        write_json_atomic(self.path, self._grants)

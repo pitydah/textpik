@@ -17,7 +17,8 @@ htmlcov/
 # PyInstaller
 .build/
 .build-venv/
-.spec
+.build-appimage/
+*.spec
 
 # Virtual environments
 venv/

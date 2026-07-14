@@ -1,20 +1,25 @@
 import inspect
+import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QTabWidget
 
 from src.textpik import (
     ActionPalette,
+    APP_VERSION,
     BaseSelectionMonitor,
     DEFAULT_ACTIONS,
     DEFAULT_SETTINGS,
     PopupWindow,
+    SettingsDialog,
     TextPikApp,
     FunctionWorker,
     build_command_argv,
@@ -22,6 +27,7 @@ from src.textpik import (
     classify_text,
     desktop_environment,
     is_kde,
+    load_settings,
     normalize_settings,
     normalize_url,
     validate_actions,
@@ -29,6 +35,22 @@ from src.textpik import (
 
 
 class CoreHelpersTest(unittest.TestCase):
+    def test_unchanged_settings_are_not_rewritten_on_startup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            config_dir = Path(temp)
+            settings_file = config_dir / "settings.json"
+            settings_file.write_text(
+                json.dumps(DEFAULT_SETTINGS, ensure_ascii=False), encoding="utf-8"
+            )
+            with (
+                patch("src.textpik.CONFIG_DIR", config_dir),
+                patch("src.textpik.SETTINGS_FILE", settings_file),
+                patch("src.textpik.write_json_atomic") as writer,
+            ):
+                loaded = load_settings()
+            self.assertEqual(loaded, DEFAULT_SETTINGS)
+            writer.assert_not_called()
+
     def test_headless_clipboard_without_mime_data_is_empty(self):
         clipboard = SimpleNamespace(mimeData=lambda: None)
         self.assertFalse(clipboard_has_text(clipboard))
@@ -263,6 +285,92 @@ class PopupCompositionTest(unittest.TestCase):
         self.assertEqual(len(popup._action_buttons), len(actions))
         self.assertIsNone(popup._more_button)
         popup.hide()
+
+    def test_adaptive_mode_uses_compact_direct_action_limit(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["max_popup_actions"] = 12
+        settings["popup_compact_actions"] = 4
+        actions = DEFAULT_ACTIONS[:15]
+        popup = PopupWindow(actions, None, settings)
+        popup.set_actions(actions, compact=True)
+        popup.show()
+        self.app.processEvents()
+
+        self.assertEqual(len(popup.visible_actions), 4)
+        self.assertEqual(len(popup._action_buttons), 4)
+        self.assertIsNotNone(popup._more_button)
+        self.assertEqual(
+            popup._action_buttons[0].accessibleName(), actions[0]["name"]
+        )
+        self.assertEqual(popup._more_button.accessibleName(), "Más acciones")
+        popup.hide()
+
+
+class SettingsAboutTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    @staticmethod
+    def _controller():
+        availability = SimpleNamespace(
+            available=True,
+            degraded=False,
+            label="Disponible",
+        )
+        return SimpleNamespace(
+            atspi=SimpleNamespace(available=True),
+            actions=list(DEFAULT_ACTIONS),
+            popup=SimpleNamespace(set_actions=lambda _actions: None),
+            build_diagnostics=lambda: "OK",
+            action_integration_status=lambda _action: availability,
+            save_actions=lambda: None,
+            update_settings=lambda _settings: None,
+            test_popup=lambda: None,
+        )
+
+    def test_about_tab_exposes_version_description_and_github_actions(self):
+        dialog = SettingsDialog(
+            dict(DEFAULT_SETTINGS), DEFAULT_ACTIONS, self._controller()
+        )
+        tabs = dialog.findChild(QTabWidget)
+        labels = [tabs.tabText(index).strip() for index in range(tabs.count())]
+        self.assertIn("Acerca de", labels)
+        self.assertIn(APP_VERSION, dialog.about_version_label.text())
+        self.assertIn("Linux", dialog.about_description_label.text())
+
+        with patch("src.textpik.QDesktopServices.openUrl", return_value=True) as opener:
+            dialog.github_profile_button.click()
+            self.assertEqual(opener.call_args.args[0].toString(), "https://github.com/pitydah")
+            dialog.sponsor_button.click()
+            self.assertEqual(
+                opener.call_args.args[0].toString(),
+                "https://github.com/sponsors/pitydah",
+            )
+        dialog.close()
+
+    def test_about_links_reject_non_github_targets(self):
+        with patch("src.textpik.QDesktopServices.openUrl") as opener:
+            self.assertFalse(SettingsDialog._open_external_url("http://example.com"))
+            opener.assert_not_called()
+
+    def test_context_profiles_round_trip_through_settings_ui(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["context_profiles_enabled"] = True
+        settings["context_profiles"] = [
+            {
+                "name": "Navegador",
+                "application": "firefox",
+                "text_types": ["url"],
+                "action_ids": ["copy"],
+            }
+        ]
+        dialog = SettingsDialog(settings, DEFAULT_ACTIONS, self._controller())
+        self.assertTrue(dialog.context_profiles_enabled.isChecked())
+        self.assertEqual(dialog.context_profiles_list.count(), 1)
+        collected, _actions = dialog.collect_settings()
+        self.assertEqual(collected["context_profiles"], settings["context_profiles"])
+        dialog.close()
 
 
 if __name__ == "__main__":

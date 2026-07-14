@@ -11,7 +11,11 @@ from .models import AnchorSource, PopupAnchor
 
 
 def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
-    """Place a popup near an anchor, preferring positions outside selected text."""
+    """Place a popup using a small deterministic candidate score.
+
+    The candidate set is deliberately bounded: placement stays constant-time on
+    the selection hot path while avoiding both selected text and screen edges.
+    """
     width, height = popup_size
     sx, sy, sw, sh = screen_rect
     right, bottom = sx + sw, sy + sh
@@ -20,11 +24,11 @@ def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
     if avoid_rect:
         rx, ry, rw, rh = avoid_rect
         candidates = [
-            (ax + gap, ay + gap),
-            (ax - width, ry - height - gap),
-            (ax - width, ry + rh + gap),
+            (ax - width // 2, ry - height - gap),
+            (ax - width // 2, ry + rh + gap),
             (rx + rw + gap, ay - height // 2),
             (rx - width - gap, ay - height // 2),
+            (ax + gap, ay + gap),
         ]
     else:
         candidates = [
@@ -34,29 +38,34 @@ def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
             (ax - width - gap, ay - height - gap),
         ]
 
-    def fits(x, y):
-        return sx <= x and sy <= y and x + width <= right and y + height <= bottom
+    def clamp(value, low, high):
+        return min(max(value, low), max(low, high))
 
-    def overlaps(x, y):
+    def overlap_area(x, y):
         if not avoid_rect:
-            return False
+            return 0
         rx, ry, rw, rh = avoid_rect
-        return not (
-            x + width <= rx - gap
-            or x >= rx + rw + gap
-            or y + height <= ry - gap
-            or y >= ry + rh + gap
+        overlap_width = max(0, min(x + width, rx + rw) - max(x, rx))
+        overlap_height = max(0, min(y + height, ry + rh) - max(y, ry))
+        return overlap_width * overlap_height
+
+    scored = []
+    for order, (raw_x, raw_y) in enumerate(candidates):
+        x = clamp(raw_x, sx, right - width)
+        y = clamp(raw_y, sy, bottom - height)
+        displacement = abs(x - raw_x) + abs(y - raw_y)
+        distance = abs((x + width // 2) - ax) + abs((y + height // 2) - ay)
+        covers_anchor = x <= ax <= x + width and y <= ay <= y + height
+        score = (
+            overlap_area(x, y) * 10_000
+            + int(covers_anchor) * 1_000_000
+            + displacement * 80
+            + distance
+            + order
         )
-
-    for x, y in candidates:
-        if fits(x, y) and not overlaps(x, y):
-            return round(x), round(y)
-
-    x, y = candidates[0]
-    return (
-        round(min(max(x, sx), max(sx, right - width))),
-        round(min(max(y, sy), max(sy, bottom - height))),
-    )
+        scored.append((score, round(x), round(y)))
+    _, x, y = min(scored)
+    return x, y
 
 
 def stabilize_popup_position(

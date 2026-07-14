@@ -9,6 +9,7 @@ BuildArch:      noarch
 BuildRequires:  python3-devel python3-pip pyproject-rpm-macros
 Requires:       python3-pyside6 python3-gobject at-spi2-core xdg-utils
 Recommends:     wl-clipboard xdotool
+Suggests:       python3-pyenchant hunspell-es
 
 %description
 TextPik shows context-aware actions next to selected text on Linux desktops.

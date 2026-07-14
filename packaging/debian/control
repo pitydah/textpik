@@ -11,6 +11,6 @@ Package: textpik
 Architecture: all
 Depends: ${misc:Depends}, ${python3:Depends}, python3-pyside6.qtcore, python3-pyside6.qtgui, python3-pyside6.qtwidgets, python3-pyside6.qtdbus, python3-gi, gir1.2-atspi-2.0, xdg-utils
 Recommends: wl-clipboard, xdotool
-Suggests: wtype, ydotool, kdeconnect, cups-client
+Suggests: wtype, ydotool, kdeconnect, cups-client, python3-enchant, hunspell-es
 Description: compact action bar for selected text
  TextPik shows context-aware actions next to selected text on Linux desktops.

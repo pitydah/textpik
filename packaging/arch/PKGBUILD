@@ -14,7 +14,9 @@ optdepends=('ydotool: auto-paste on Wayland'
             'wtype: auto-paste on Wayland'
             'konsole: terminal action'
             'cups: print action'
-            'ollama: AI query action')
+            'ollama: AI query action'
+            'python-pyenchant: on-demand spelling correction'
+            'hunspell-es_any: Spanish spelling dictionaries')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/pitydah/textpik/archive/refs/tags/v$_tag.tar.gz")
 sha256sums=('SKIP')
 

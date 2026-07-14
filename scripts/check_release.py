@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -99,9 +100,39 @@ def validate(tag: str | None = None) -> tuple[str, dict[str, str]]:
     if f'APP_VERSION = "{values["display"]}"' not in read("src/textpik.py"):
         errors.append("Runtime application version is inconsistent")
 
+    if re.fullmatch(r"\d+\.\d+\.\d+", version):
+        errors.extend(validate_stable_evidence(version))
+
     if errors:
         raise ValueError("\n".join(f"- {error}" for error in errors))
     return version, values
+
+
+def validate_stable_evidence(version: str) -> list[str]:
+    """Require explicit human evidence before stable metadata can pass."""
+    try:
+        evidence = json.loads(read("release-validation.json"))
+    except (OSError, ValueError):
+        return ["stable release validation evidence is missing or invalid"]
+    errors = []
+    if evidence.get("target_version") != version:
+        errors.append("stable evidence target_version is inconsistent")
+    try:
+        crash_free_cycles = int(evidence.get("crash_free_rc_cycles", 0))
+    except (TypeError, ValueError):
+        crash_free_cycles = 0
+    if crash_free_cycles < 2:
+        errors.append("stable promotion requires two crash-free RC cycles")
+    matrix = evidence.get("manual_desktop_matrix", {})
+    required = ("kde_wayland", "kde_x11", "gnome_wayland", "gnome_x11")
+    missing = [name for name in required if not matrix.get(name, False)]
+    if missing:
+        errors.append("stable desktop validation missing: " + ", ".join(missing))
+    if not evidence.get("accessibility_reviewed", False):
+        errors.append("stable accessibility review is incomplete")
+    if not evidence.get("translations_reviewed", False):
+        errors.append("stable translation review is incomplete")
+    return errors
 
 
 def main() -> int:

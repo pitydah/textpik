@@ -14,15 +14,19 @@ copy, search, translate, open links, and more with one click.
 
 ## Features
 
-- 22 built-in actions: copy/paste, search, translation, text transforms,
-  terminal, print, Ollama, KDE Connect and Klipper
+- 23 built-in actions: copy/paste, search, translation, text transforms,
+  on-demand spelling correction, terminal, print, Ollama, KDE Connect and Klipper
 - Context-aware filtering for URLs, email, code, numbers and regular text,
   while preserving the user's fixed order
+- Optional context profiles choose an explicit action subset for an application
+  and/or text type, with first-match priority and no automatic reordering
 - Expandable popup with a user-defined number of direct actions, optional
   “show all” mode and drag-and-drop ordering; “More actions” contains only the
   real overflow and remains fuzzy-searchable
-- Smart placement beside the pointer without covering the selected text,
-  right-click suppression and optional inactivity auto-hide
+- Confidence-aware composition: incomplete desktop context gets a smaller bar,
+  while clearly non-text or very low-confidence selections are suppressed
+- Constant-time candidate placement beside the pointer without covering the
+  selected text, right-click suppression and optional inactivity auto-hide
 - Configurable icon size, bar padding, spacing, 3–40 direct actions and cursor gap
 - File-manager awareness: file objects are ignored while text fields still work
 - Native desktop identity, XDG autostart management, AppStream metadata and
@@ -43,6 +47,8 @@ copy, search, translate, open links, and more with one click.
 - Click-outside-to-close
 - Configurable settings with theme presets (Light, Dark, OLED)
 - Numeric shortcuts 1-9 and arrow/Enter keyboard navigation when invoked by hotkey
+- Accessible names and descriptions for the compact bar, overflow search and
+  every action, without forcing focus during normal mouse selection
 - Per-application, activity and game exclusions
 
 ## Requirements
@@ -50,6 +56,8 @@ copy, search, translate, open links, and more with one click.
 - KDE Plasma, GNOME, Hyprland, Sway or another modern Linux desktop
 - Python 3.10+
 - [PySide6](https://pypi.org/project/PySide6/)
+- Optional: PyEnchant plus a Hunspell dictionary for local spelling correction;
+  neither is loaded until the spelling action is explicitly used
 - `wl-clipboard` plus `wtype` or `ydotool` on Wayland
 - `xdotool` on X11
 
@@ -163,6 +171,10 @@ Local extensions: `~/.local/share/textpik/extensions/<id>/manifest.json`
 
 The local extension format and permission model are documented in
 [`docs/extensions.md`](docs/extensions.md).
+The lightweight core boundaries and popup performance budgets are documented in
+[`docs/architecture.md`](docs/architecture.md).
+The phased delivery status and remaining lightweight improvements are tracked in
+[`docs/roadmap.md`](docs/roadmap.md).
 Logs:     `~/.cache/textpik/textpik.log`
 
 ## License

@@ -76,3 +76,55 @@ jobs:
             rpm -qpi dist/textpik-*.noarch.rpm
             rpm -qlp dist/textpik-*.noarch.rpm | grep -q /usr/bin/textpik
           '
+
+  x11-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Install virtual X11 runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon-x11-0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-render-util0 libxcb-shape0
+      - run: python -m pip install -e .
+      - name: Start, compose a profiled popup and stop on X11
+        run: xvfb-run -a env TEXTPIK_SMOKE_QPA=xcb python -m unittest tests.test_smoke -v
+        env:
+          XDG_CURRENT_DESKTOP: GNOME
+          XDG_SESSION_TYPE: x11
+
+  wayland-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+      - name: Install headless Wayland runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y weston libegl1 libgl1
+      - run: python -m pip install -e .
+      - name: Start, compose a profiled popup and stop on Wayland
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/textpik-runtime"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless-backend.so --socket=wayland-textpik \
+            --idle-time=0 --log="$RUNNER_TEMP/weston.log" &
+          weston_pid=$!
+          trap 'kill "$weston_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            test -S "$XDG_RUNTIME_DIR/wayland-textpik" && break
+            sleep 0.2
+          done
+          test -S "$XDG_RUNTIME_DIR/wayland-textpik"
+          WAYLAND_DISPLAY=wayland-textpik TEXTPIK_SMOKE_QPA=wayland \
+            python -m unittest tests.test_smoke -v
+        env:
+          XDG_CURRENT_DESKTOP: KDE
+          XDG_SESSION_TYPE: wayland

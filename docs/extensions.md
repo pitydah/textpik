@@ -32,6 +32,11 @@ permissions, unsupported schema versions and external commands that omit the
 stored locally in `~/.config/textpik/permissions.json`. Commands are parsed into
 an argument vector; they are never passed through a shell.
 
+Discovery is bounded to 64 manifests of at most 64 KiB each. Symlinks escaping
+the extension root, duplicate action IDs and unreadable manifests are rejected.
+The diagnostics page reports the rejected count, and the action editor tooltip
+shows the owning extension and requested permissions before execution.
+
 Built-in transformations (`uppercase`, `lowercase`, `capitalize` and
 `remove-breaks`) may request `replace-selection`. TextPik uses AT-SPI when the
 target is editable and otherwise copies the result.
