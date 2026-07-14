@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install runtime and build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 \
+            build-essential debhelper dh-python pybuild-plugin-pyproject \
+            python3-all python3-setuptools
+          python -m pip install -e . build coverage ruff twine
+      - name: Verify tag and release metadata
+        run: python scripts/check_release.py --tag "$GITHUB_REF_NAME"
+      - name: Run release gates
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m unittest discover -s tests -v
+          ruff check src tests scripts
+          python -m coverage erase
+          python -m coverage run --branch --source=src/textpik_core -m unittest discover -s tests
+          python -m coverage report --fail-under=60
+      - name: Build and verify artifacts
+        run: |
+          python -m build
+          python -m twine check dist/*
+          packaging/debian/build.sh
+          docker run --rm -v "$PWD:/source" -w /source fedora:latest bash -lc '
+            dnf install -y -q git rpm-build python3-devel python3-pip pyproject-rpm-macros python3-setuptools
+            git config --global --add safe.directory /source
+            packaging/rpm/build.sh
+          '
+          gh release download 1.9.1 --repo AppImage/appimagetool \
+            --pattern appimagetool-x86_64.AppImage --dir /tmp
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  /tmp/appimagetool-x86_64.AppImage" \
+            | sha256sum --check
+          chmod +x /tmp/appimagetool-x86_64.AppImage
+          APPIMAGETOOL=/tmp/appimagetool-x86_64.AppImage \
+            packaging/appimage/build.sh
+          cd dist
+          sha256sum * > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Sign build provenance with Sigstore
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        with:
+          subject-path: dist/*
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_args=()
+          case "$GITHUB_REF_NAME" in
+            *-rc.*|*-beta.*|*-alpha.*) release_args+=(--prerelease) ;;
+          esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes \
+            --verify-tag \
+            "${release_args[@]}"

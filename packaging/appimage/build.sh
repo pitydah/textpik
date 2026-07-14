@@ -20,9 +20,10 @@ cd "$PROJECT_DIR"
 python3 -m venv "$BUILD_DIR/venv"
 "$BUILD_DIR/venv/bin/pip" install pyinstaller PySide6
 "$BUILD_DIR/venv/bin/python" -m PyInstaller \
-    --onedir --name "$APP_NAME" --clean \
+    --onedir --name "$APP_NAME" --clean --noconfirm \
     --add-data "assets:assets" \
     --add-data "kwin:kwin" \
+    --collect-submodules textpik_core \
     --hidden-import PySide6.QtDBus \
     --hidden-import PySide6.QtSvg \
     src/textpik.py
@@ -31,7 +32,22 @@ python3 -m venv "$BUILD_DIR/venv"
 cp -r "$PROJECT_DIR/dist/$APP_NAME"/* "$APPDIR/"
 cp "$PROJECT_DIR/packaging/textpik.desktop" "$APPDIR/"
 cp "$PROJECT_DIR/assets/app/textpik.svg" "$APPDIR/textpik.svg"
-ln -sf textpik "$APPDIR/AppRun"
+mkdir -p "$APPDIR/usr/share/applications" "$APPDIR/usr/share/metainfo"
+cp "$PROJECT_DIR/packaging/textpik.desktop" \
+    "$APPDIR/usr/share/applications/textpik.desktop"
+cp "$PROJECT_DIR/packaging/io.github.pitydah.textpik.metainfo.xml" \
+    "$APPDIR/usr/share/metainfo/io.github.pitydah.textpik.metainfo.xml"
+ln -sf TextPik "$APPDIR/AppRun"
 
-echo "==> AppImage prepared at $APPDIR"
-echo "==> Run 'appimagetool $APPDIR' to create the AppImage"
+echo "==> AppDir prepared at $APPDIR"
+
+APPIMAGETOOL_BIN="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
+if [[ -z "$APPIMAGETOOL_BIN" ]]; then
+    echo "==> appimagetool not found; AppDir validation completed"
+    exit 0
+fi
+
+OUTPUT="$PROJECT_DIR/dist/$APP_NAME-x86_64.AppImage"
+APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL_BIN" "$APPDIR" "$OUTPUT"
+chmod +x "$OUTPUT"
+echo "==> AppImage created at $OUTPUT"

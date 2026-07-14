@@ -1,0 +1,15 @@
+include CHANGELOG.md
+include CODE_OF_CONDUCT.md
+include CONTRIBUTING.md
+include LICENSE
+include README.md
+include SECURITY.md
+recursive-include assets *.md *.png *.svg
+recursive-include docs *.json *.md
+recursive-include kwin *.json *.js
+recursive-include packaging *
+recursive-include scripts *.py
+recursive-include tests *.py
+prune build
+prune dist
+global-exclude __pycache__ *.py[cod]

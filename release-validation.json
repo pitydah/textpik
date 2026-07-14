@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "target_version": "0.4.0",
+  "crash_free_rc_cycles": 0,
+  "manual_desktop_matrix": {
+    "kde_wayland": false,
+    "kde_x11": false,
+    "gnome_wayland": false,
+    "gnome_x11": false
+  },
+  "accessibility_reviewed": false,
+  "translations_reviewed": false
+}

@@ -1,9 +1,13 @@
 [Desktop Entry]
 Type=Application
 Name=TextPik
-Comment=Popup action bar on text selection
+GenericName=Selected Text Actions
+Comment=Fast contextual actions for selected text
 Exec=textpik
 Icon=textpik
 Terminal=false
-Categories=Utility;
+Categories=Utility;TextTools;
+Keywords=text;selection;clipboard;actions;search;translate;
 StartupNotify=false
+StartupWMClass=textpik
+X-GNOME-UsesNotifications=true

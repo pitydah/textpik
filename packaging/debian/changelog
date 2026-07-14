@@ -1,0 +1,5 @@
+textpik (0.4.0~rc1-1) unstable; urgency=medium
+
+  * First release candidate with crash fixes and intelligent selection sessions.
+
+ -- TextPik contributors <pitydah@github.com>  Mon, 13 Jul 2026 00:00:00 -0400

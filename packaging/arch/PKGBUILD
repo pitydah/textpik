@@ -2,25 +2,32 @@
 # Contributor: pitydah <pitydah@github.com>
 
 pkgname=textpik
-pkgver=0.3.0
+pkgver=0.4.0rc1
 pkgrel=1
-pkgdesc="Popup action bar on text selection for KDE Plasma 6 (Wayland + X11)"
+_tag=0.4.0-rc.1
+pkgdesc="Cross-desktop popup action bar for selected text (Wayland + X11)"
 arch=('any')
 url="https://github.com/pitydah/textpik"
 license=('GPL3')
-depends=('python' 'pyside6' 'wl-clipboard' 'xdotool' 'qt6-svg')
+depends=('python' 'pyside6' 'python-gobject' 'at-spi2-core' 'wl-clipboard' 'xdotool' 'qt6-svg')
 optdepends=('ydotool: auto-paste on Wayland'
             'wtype: auto-paste on Wayland'
             'konsole: terminal action'
-            'ollama: AI query action')
-source=("$pkgname-$pkgver.tar.gz::https://github.com/pitydah/textpik/archive/refs/tags/v$pkgver.tar.gz")
+            'cups: print action'
+            'ollama: AI query action'
+            'python-pyenchant: on-demand spelling correction'
+            'hunspell-es_any: Spanish spelling dictionaries')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/pitydah/textpik/archive/refs/tags/v$_tag.tar.gz")
 sha256sums=('SKIP')
 
 package() {
-    cd "$srcdir/$pkgname-$pkgver"
-    install -Dm755 src/textpik.py "$pkgdir/usr/bin/textpik"
+    cd "$srcdir/$pkgname-$_tag"
+    install -Dm755 packaging/textpik "$pkgdir/usr/bin/textpik"
+    install -Dm644 src/textpik.py "$pkgdir/usr/lib/textpik/textpik.py"
+    cp -r src/textpik_core "$pkgdir/usr/lib/textpik/textpik_core"
     install -Dm644 assets/app/textpik.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/textpik.svg"
     install -Dm644 packaging/textpik.desktop "$pkgdir/usr/share/applications/textpik.desktop"
+    install -Dm644 packaging/io.github.pitydah.textpik.metainfo.xml "$pkgdir/usr/share/metainfo/io.github.pitydah.textpik.metainfo.xml"
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     cp -r assets "$pkgdir/usr/share/textpik/"

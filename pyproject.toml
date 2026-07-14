@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textpik"
+version = "0.4.0rc1"
+description = "A compact Linux text-selection action bar"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{name = "TextPik contributors"}]
+dependencies = ["PySide6>=6.5"]
+
+[project.optional-dependencies]
+spelling = ["pyenchant>=3.2"]
+
+[project.scripts]
+textpik = "textpik:cli_entry"
+
+[project.urls]
+Homepage = "https://github.com/pitydah/textpik"
+Issues = "https://github.com/pitydah/textpik/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["textpik"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["textpik_core*"]
+
+[tool.setuptools.data-files]
+"share/textpik/assets/actions" = ["assets/actions/*.svg", "assets/actions/README.md"]
+"share/textpik/assets/app" = ["assets/app/*.svg", "assets/app/*.png"]
+"share/textpik/assets/tray" = ["assets/tray/*.svg"]
+"share/textpik/kwin/textpik-cursor-bridge" = ["kwin/textpik-cursor-bridge/metadata.json"]
+"share/textpik/kwin/textpik-cursor-bridge/contents/code" = ["kwin/textpik-cursor-bridge/contents/code/main.js"]
+"share/applications" = ["packaging/textpik.desktop"]
+"share/icons/hicolor/scalable/apps" = ["assets/app/textpik.svg"]
+"share/metainfo" = ["packaging/io.github.pitydah.textpik.metainfo.xml"]
+"share/doc/textpik" = [
+    "docs/extensions.md",
+    "docs/architecture.md",
+    "docs/action-manifest.schema.json",
+    "docs/release-checklist.md",
+    "docs/roadmap.md",
+    "SECURITY.md",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88

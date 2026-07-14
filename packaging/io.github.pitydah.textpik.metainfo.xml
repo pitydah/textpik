@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.pitydah.textpik</id>
+  <name>TextPik</name>
+  <summary>Contextual actions for selected text</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.pitydah">
+    <name>TextPik contributors</name>
+  </developer>
+  <description>
+    <p>TextPik displays a compact, context-aware action bar beside selected text on modern Linux desktops.</p>
+    <p>Search, translate, transform, copy and share text without interrupting your workflow.</p>
+  </description>
+  <launchable type="desktop-id">textpik.desktop</launchable>
+  <url type="homepage">https://github.com/pitydah/textpik</url>
+  <url type="bugtracker">https://github.com/pitydah/textpik/issues</url>
+  <provides>
+    <binary>textpik</binary>
+  </provides>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <releases>
+    <release version="0.4.0-rc.1" date="2026-07-13" type="development">
+      <description><p>Release candidate with crash-safe workers, intelligent selection sessions and cross-desktop Wayland integration.</p></description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

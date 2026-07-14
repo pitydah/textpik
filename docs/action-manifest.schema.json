@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/pitydah/textpik/action-manifest.schema.json",
+  "title": "TextPik local action extension",
+  "type": "object",
+  "required": ["schema_version", "action"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "action": {
+      "type": "object",
+      "required": ["name", "icon", "cmd", "permissions"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "icon": {"type": "string", "minLength": 1},
+        "cmd": {"type": "string", "minLength": 1},
+        "enabled": {"type": "boolean"},
+        "operation": {"enum": ["copy", "transform", "open-url", "command", "system"]},
+        "result": {"enum": ["none", "copy", "replace-selection", "open", "dialog"]},
+        "context": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "permissions": {
+          "type": "array",
+          "items": {"enum": ["clipboard", "network", "process", "filesystem", "accessibility"]},
+          "uniqueItems": true
+        },
+        "category": {"type": "string"}
+      }
+    }
+  }
+}
