@@ -2,7 +2,7 @@
 
 Popup action bar on text selection for Linux desktops (Wayland & X11).
 
-Development status: **0.4.0 RC1 candidate**. Promotion requirements are tracked
+Development status: **0.5.0 RC1 candidate**. Promotion requirements are tracked
 in the [release checklist](docs/release-checklist.md). Security-sensitive reports
 must follow [SECURITY.md](SECURITY.md) instead of a public bug report.
 
@@ -23,6 +23,15 @@ copy, search, translate, open links, and more with one click.
 - Expandable popup with a user-defined number of direct actions, optional
   “show all” mode and drag-and-drop ordering; “More actions” contains only the
   real overflow and remains fuzzy-searchable
+- Local inline calculations, unit conversions and text statistics without a
+  network request
+- On-demand LanguageTool grammar review with before/after confirmation
+- Transactional undo for transforms, spelling, grammar and automations
+- Optional bounded private history, disabled by default and encryptable through
+  `TEXTPIK_HISTORY_KEY`
+- Declarative shell-free automations and integrity-checked WASI extensions
+- Local OCR for image files or screen regions through an external Tesseract
+  installation
 - Confidence-aware composition: incomplete desktop context gets a smaller bar,
   while clearly non-text or very low-confidence selections are suppressed
 - Constant-time candidate placement beside the pointer without covering the
@@ -171,6 +180,8 @@ Local extensions: `~/.local/share/textpik/extensions/<id>/manifest.json`
 
 The local extension format and permission model are documented in
 [`docs/extensions.md`](docs/extensions.md).
+Declarative automations are documented in
+[`docs/automations.md`](docs/automations.md).
 The lightweight core boundaries and popup performance budgets are documented in
 [`docs/architecture.md`](docs/architecture.md).
 The phased delivery status and remaining lightweight improvements are tracked in

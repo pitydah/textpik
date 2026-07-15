@@ -28,6 +28,24 @@ loaded only after an explicit action.
   startup proof that optional dictionaries remain unloaded, signed SLSA/Sigstore
   artifact provenance and machine-enforced manual promotion evidence.
 
+## TextPik Next 0.5 additions
+
+- Local inline result card with safe arithmetic, unit conversion and statistics.
+- Extended deterministic classification for dates, currency, coordinates, DOI,
+  ISBN, paths and error output.
+- Optional content-free usage ranking with at most two recommendations.
+- Personal spelling words, ignored words, automatic dictionary ordering and
+  transactional undo.
+- Explicit LanguageTool review, before/after confirmation and bounded response.
+- Declarative shell-free automations loaded from a versionable JSON file.
+- Ollama task selection through a local-only endpoint and bounded responses.
+- On-demand Tesseract OCR for files and desktop-specific region capture.
+- Optional bounded private history with sensitive-data rejection and lazy
+  Fernet encryption when a user key is configured.
+- Integrity-checked WASI extension manifests with explicit permission and
+  execution timeout.
+- CI gates for core classification/insight latency and process PSS.
+
 ## Next delivery gates
 
 - Complete the physical KDE/GNOME X11/Wayland matrix and record results in
@@ -35,6 +53,14 @@ loaded only after an explicit action.
 - Complete the human accessibility and translation reviews.
 - Finish two crash-free RC cycles without unresolved P0/P1 defects.
 - Build/install the Flatpak and AppImage on clean target systems.
+- Add a graphical automation editor; the 0.5 engine currently uses the documented
+  declarative file format.
+- Add an XDG Screenshot portal adapter for desktops without Spectacle,
+  GNOME Screenshot or grim/slurp.
+- Evaluate a signed community catalog only after the WASI v2 runtime has passed
+  an independent sandbox review.
+- Keep semantic history and cross-device synchronization out of the resident
+  application until they can be delivered as separately installed components.
 
 ## Non-negotiable performance rules
 

@@ -4,8 +4,45 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter_ns
+from pathlib import Path
 
 MAX_METRICS = 16
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessResources:
+    rss_kib: int
+    pss_kib: int | None
+    threads: int
+
+
+def read_process_resources(proc_root: Path = Path("/proc/self")) -> ProcessResources | None:
+    """Read Linux process counters without importing psutil or starting a probe."""
+    try:
+        status = (proc_root / "status").read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    def field(name: str) -> int | None:
+        for line in status.splitlines():
+            if line.startswith(f"{name}:"):
+                try:
+                    return int(line.split()[1])
+                except (IndexError, ValueError):
+                    return None
+        return None
+
+    pss = None
+    try:
+        rollup = (proc_root / "smaps_rollup").read_text(encoding="utf-8")
+        for line in rollup.splitlines():
+            if line.startswith("Pss:"):
+                pss = int(line.split()[1])
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    rss, threads = field("VmRSS"), field("Threads")
+    return ProcessResources(rss or 0, pss, threads or 0)
 
 
 @dataclass(frozen=True, slots=True)

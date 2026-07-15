@@ -25,6 +25,14 @@ def action_availability(
         return ActionAvailability(False, "Requiere CUPS (comando lp)")
     if command == "ollama" and not which("ollama"):
         return ActionAvailability(False, "Ollama no está instalado")
+    if command in {"ocr-image", "ocr-region"} and not which("tesseract"):
+        return ActionAvailability(False, "Tesseract no está instalado")
+    if command == "ocr-region" and not (
+        which("spectacle")
+        or which("gnome-screenshot")
+        or (which("grim") and which("slurp"))
+    ):
+        return ActionAvailability(False, "No hay capturador de región compatible")
     if command in {"klipper-save", "klipper-menu"}:
         ready = kde and "org.kde.klipper" in services
         return ActionAvailability(ready, "Klipper no está disponible" if not ready else "Integración Klipper")

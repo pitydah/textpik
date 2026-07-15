@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "textpik"
-version = "0.4.0rc1"
+version = "0.5.0rc1"
 description = "A compact Linux text-selection action bar"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,6 +14,7 @@ dependencies = ["PySide6>=6.5"]
 
 [project.optional-dependencies]
 spelling = ["pyenchant>=3.2"]
+privacy = ["cryptography>=41"]
 
 [project.scripts]
 textpik = "textpik:cli_entry"
@@ -41,6 +42,7 @@ include = ["textpik_core*"]
 "share/metainfo" = ["packaging/io.github.pitydah.textpik.metainfo.xml"]
 "share/doc/textpik" = [
     "docs/extensions.md",
+    "docs/automations.md",
     "docs/architecture.md",
     "docs/action-manifest.schema.json",
     "docs/release-checklist.md",

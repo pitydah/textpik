@@ -40,7 +40,7 @@ dragging and multi-file selections never expose a popup.
 
 ## Promotion
 
-Create `v0.4.0-rc.1` only after every automated gate and required manual entry is
+Create `v0.5.0-rc.1` only after every automated gate and required manual entry is
 green. Promote to stable only after the RC has no unresolved P0/P1 defects during
 the agreed testing period. Record the four desktop checks, accessibility review,
 translation review and crash-free RC count in `release-validation.json`.

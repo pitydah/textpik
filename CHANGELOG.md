@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.0-rc.1 — 2026-07-14
+
+### Inteligencia local
+- Resultados inline para cálculos, conversiones y estadísticas sin red.
+- Clasificación de fechas, monedas, coordenadas, DOI, ISBN, rutas y errores.
+- Ranking local opcional por contexto, frecuencia y recencia sin guardar texto.
+- Posicionamiento que evita la dirección reciente del puntero.
+
+### Escritura y productividad
+- Ortografía con detección ligera de idioma, ignorados, diccionario personal y deshacer.
+- LanguageTool bajo demanda con vista antes/después y aplicación transaccional.
+- Automatizaciones declarativas, condicionadas, con vista previa y sin shell.
+- Historial privado limitado, excluyente de secretos y cifrable opcionalmente.
+
+### Proveedores y ecosistema
+- Ollama local con tareas explícitas, respuesta limitada y endpoint exclusivamente local.
+- OCR local de archivos y regiones con Tesseract y adaptadores de escritorio.
+- Extensiones WASI v2 confinadas, con timeout, permiso explícito e integridad SHA-256.
+- Puertas CI para latencia del núcleo y PSS, además de 102 pruebas automatizadas.
+
 ## v0.4.0-rc.1 — 2026-07-13
 
 ### Estabilidad

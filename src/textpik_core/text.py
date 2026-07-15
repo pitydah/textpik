@@ -85,6 +85,26 @@ def classify_text(text: str) -> frozenset[str]:
         types.add("number")
     if re.fullmatch(r"#[0-9a-fA-F]{3,8}", stripped):
         types.add("color")
+    if re.fullmatch(r"-?\d{1,3}(?:\.\d+)?\s*,\s*-?\d{1,3}(?:\.\d+)?", stripped):
+        latitude, longitude = (float(value.strip()) for value in stripped.split(","))
+        if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+            types.add("coordinates")
+    if re.fullmatch(r"10\.\d{4,9}/\S+", stripped, re.IGNORECASE):
+        types.add("doi")
+    compact_isbn = re.sub(r"[-\s]", "", stripped)
+    if re.fullmatch(r"(?:\d{9}[\dXx]|97[89]\d{10})", compact_isbn):
+        types.add("isbn")
+    if re.fullmatch(r"(?:\$|€|£|¥|CLP|USD|EUR|GBP)\s*\d[\d.,]*", stripped, re.I):
+        types.add("currency")
+    if re.fullmatch(
+        r"(?:\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})",
+        stripped,
+    ):
+        types.add("date")
+    if re.fullmatch(r"(?:~?/|\./|\.\./)[^\0\n]+", stripped):
+        types.add("path")
+    if re.search(r"(?:error|exception|traceback|segmentation fault|failed:)", stripped, re.I):
+        types.add("error")
 
     code_tokens = (
         "def ",

@@ -18,6 +18,12 @@ DEFAULT_SETTINGS = {
     "show_all_popup_actions": False,
     "confirm_terminal_execution": True,
     "context_aware": True,
+    "local_recommendations": False,
+    "history_enabled": False,
+    "history_max_items": 100,
+    "history_max_age_days": 30,
+    "spelling_ignored_words": [],
+    "spelling_personal_words": [],
     "context_profiles_enabled": False,
     "context_profiles": [],
     "spelling_action_migrated": False,
@@ -117,6 +123,8 @@ def normalize_settings(
     _normalize_int(normalized, "popup_min_confidence", minimum=0, maximum=90)
     _normalize_int(normalized, "popup_full_confidence", minimum=50, maximum=100)
     _normalize_int(normalized, "popup_compact_actions", minimum=3, maximum=8)
+    _normalize_int(normalized, "history_max_items", minimum=10, maximum=1000)
+    _normalize_int(normalized, "history_max_age_days", minimum=1, maximum=3650)
     _normalize_int(normalized, "popup_icon_size", minimum=12, maximum=64)
     _normalize_int(normalized, "popup_button_padding", minimum=2, maximum=12)
     _normalize_int(normalized, "popup_spacing", minimum=0, maximum=8)
@@ -145,6 +153,8 @@ def normalize_settings(
         "blocked_apps_enabled",
         "blocked_activities_enabled",
         "context_aware",
+        "local_recommendations",
+        "history_enabled",
         "context_profiles_enabled",
         "spelling_action_migrated",
         "adaptive_popup",
@@ -180,6 +190,19 @@ def normalize_settings(
     normalized["context_profiles"] = normalize_profiles(
         normalized.get("context_profiles", [])
     )
+    for key in ("spelling_ignored_words", "spelling_personal_words"):
+        values = normalized.get(key, [])
+        normalized[key] = (
+            list(
+                dict.fromkeys(
+                    str(value).strip().casefold()
+                    for value in values[:500]
+                    if str(value).strip()
+                )
+            )
+            if isinstance(values, list)
+            else []
+        )
 
     if normalized.get("theme_preset") not in ("custom", "dark", "light", "oled"):
         normalized["theme_preset"] = "custom"

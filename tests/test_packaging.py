@@ -89,7 +89,7 @@ class PackagingTest(unittest.TestCase):
         )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        errors = module.validate_stable_evidence("0.4.0")
+        errors = module.validate_stable_evidence("0.5.0")
         self.assertTrue(any("crash-free RC" in error for error in errors))
         self.assertTrue(any("desktop validation" in error for error in errors))
 

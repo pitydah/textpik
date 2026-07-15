@@ -10,7 +10,14 @@ from collections.abc import Iterable
 from .models import AnchorSource, PopupAnchor
 
 
-def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
+def place_popup(
+    anchor,
+    popup_size,
+    screen_rect,
+    avoid_rect=None,
+    gap=6,
+    pointer_direction=None,
+):
     """Place a popup using a small deterministic candidate score.
 
     The candidate set is deliberately bounded: placement stays constant-time on
@@ -37,6 +44,14 @@ def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
             (ax - width - gap, ay + gap),
             (ax - width - gap, ay - height - gap),
         ]
+
+    if pointer_direction and len(candidates) >= 4:
+        dx, dy = pointer_direction
+        if abs(dx) > abs(dy):
+            preferred = 3 if dx > 0 else 2
+        else:
+            preferred = 0 if dy > 0 else 1
+        candidates.insert(0, candidates.pop(preferred))
 
     def clamp(value, low, high):
         return min(max(value, low), max(low, high))
