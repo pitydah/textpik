@@ -6,7 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.textpik_core.automation import automation_matches, preview_automation
+from src.textpik_core.automation import (
+    AUTOMATION_TEMPLATES,
+    automation_matches,
+    automation_template,
+    preview_automation,
+)
 from src.textpik_core.grammar import LanguageToolService, apply_suggestions
 from src.textpik_core.history import HistoryStore
 from src.textpik_core.insights import convert_units, local_insight, safe_calculate
@@ -34,6 +39,11 @@ from src.textpik_core.utilities import (
     slugify,
 )
 from src.textpik_core.selection import adaptive_selection_delay
+from src.textpik_core.portal import (
+    portal_file_path,
+    portal_request_path,
+    portal_supports_area,
+)
 
 
 class InsightTest(unittest.TestCase):
@@ -101,6 +111,34 @@ class WritingTest(unittest.TestCase):
 
 
 class AutomationAndStateTest(unittest.TestCase):
+    def test_automation_templates_are_safe_independent_copies(self):
+        self.assertGreaterEqual(len(AUTOMATION_TEMPLATES), 4)
+        first = automation_template("quote")
+        second = automation_template("quote")
+        first[0]["value"] = "changed"
+        self.assertEqual(second[0]["value"], "“")
+        self.assertEqual(preview_automation({"steps": second}, "hola").after, "“hola”")
+        with self.assertRaises(ValueError):
+            automation_template("missing")
+
+    def test_portal_request_and_local_result_validation(self):
+        self.assertEqual(
+            portal_request_path(":1.42", "textpik_abc"),
+            "/org/freedesktop/portal/desktop/request/1_42/textpik_abc",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "captura con espacio.png"
+            image.write_bytes(b"png")
+            self.assertEqual(
+                portal_file_path({"uri": image.as_uri()}), image
+            )
+
+        self.assertTrue(portal_supports_area(3, 5))
+        self.assertFalse(portal_supports_area(3, 3))
+        self.assertFalse(portal_supports_area(2, 4))
+        with self.assertRaises(RuntimeError):
+            portal_file_path({"uri": "https://example.com/image.png"})
+
     def test_popup_composition_and_modifier_variants(self):
         composition = plan_popup_composition(
             20, requested=12, row_capacity=6, allow_two_rows=True,

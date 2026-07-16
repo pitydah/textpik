@@ -22,6 +22,11 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import quote_plus
 
+if len(sys.argv) >= 2 and sys.argv[1] in {"--self-check", "--self-check-gui"}:
+    # Some minimal package-test images ship libatspi without an accessibility
+    # bus. Prevent its import-time bridge from aborting the diagnostic process.
+    os.environ.setdefault("NO_AT_BRIDGE", "1")
+
 try:
     from textpik_core.actions import (
         PermissionStore,
@@ -74,7 +79,13 @@ try:
     from textpik_core.providers import OllamaProvider, TesseractProvider
     from textpik_core.history import HistoryStore
     from textpik_core.health import CrashSentinel
-    from textpik_core.automation import automation_matches, preview_automation
+    from textpik_core.automation import (
+        AUTOMATION_TEMPLATES,
+        automation_matches,
+        automation_template,
+        preview_automation,
+    )
+    from textpik_core.portal import capture_xdg_screenshot
     from textpik_core.wasi import run_wasi
     from textpik_core.settings import (
         DEFAULT_SETTINGS,
@@ -138,7 +149,13 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.providers import OllamaProvider, TesseractProvider
     from .textpik_core.history import HistoryStore
     from .textpik_core.health import CrashSentinel
-    from .textpik_core.automation import automation_matches, preview_automation
+    from .textpik_core.automation import (
+        AUTOMATION_TEMPLATES,
+        automation_matches,
+        automation_template,
+        preview_automation,
+    )
+    from .textpik_core.portal import capture_xdg_screenshot
     from .textpik_core.wasi import run_wasi
     from .textpik_core.settings import (
         DEFAULT_SETTINGS,
@@ -2579,8 +2596,25 @@ class AutomationEditDialog(QDialog):
         form.addRow("Edición", self.editable_combo)
         layout.addLayout(form)
 
+        template_row = QHBoxLayout()
+        self.template_combo = QComboBox(self)
+        self.template_combo.addItem("Elegir plantilla…", "")
+        for template in AUTOMATION_TEMPLATES:
+            self.template_combo.addItem(template["name"], template["id"])
+        apply_template = QPushButton("Aplicar", self)
+        apply_template.clicked.connect(self._apply_template)
+        template_row.addWidget(QLabel("Plantilla", self))
+        template_row.addWidget(self.template_combo, 1)
+        template_row.addWidget(apply_template)
+        layout.addLayout(template_row)
+
         self.steps_list = QListWidget(self)
         self.steps_list.setAlternatingRowColors(True)
+        self.steps_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.steps_list.setDefaultDropAction(Qt.MoveAction)
+        self.steps_list.setDragEnabled(True)
+        self.steps_list.setAcceptDrops(True)
+        self.steps_list.setDropIndicatorShown(True)
         for step in flow.get("steps", []):
             self._append_step(dict(step))
         layout.addWidget(self.steps_list, 1)
@@ -2596,11 +2630,19 @@ class AutomationEditDialog(QDialog):
         add_step.clicked.connect(self._add_step)
         remove_step = QPushButton("Eliminar paso", self)
         remove_step.clicked.connect(self._remove_step)
+        move_up = QPushButton("↑", self)
+        move_up.setToolTip("Mover paso hacia arriba")
+        move_up.clicked.connect(lambda: self._move_step(-1))
+        move_down = QPushButton("↓", self)
+        move_down.setToolTip("Mover paso hacia abajo")
+        move_down.clicked.connect(lambda: self._move_step(1))
         builder.addWidget(self.operation_combo, 0, 0)
         builder.addWidget(self.source_edit, 0, 1)
         builder.addWidget(self.value_edit, 1, 1)
         builder.addWidget(add_step, 0, 2)
         builder.addWidget(remove_step, 1, 2)
+        builder.addWidget(move_up, 0, 3)
+        builder.addWidget(move_down, 1, 3)
         layout.addLayout(builder)
         note = QLabel(
             "Las automatizaciones son locales, transaccionales y no ejecutan shell. "
@@ -2614,6 +2656,25 @@ class AutomationEditDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.identifier = str(flow.get("id", ""))
+
+    def _apply_template(self):
+        identifier = self.template_combo.currentData()
+        if not identifier:
+            return
+        self.steps_list.clear()
+        for step in automation_template(identifier):
+            self._append_step(step)
+        if not self.name_edit.text().strip():
+            self.name_edit.setText(self.template_combo.currentText())
+
+    def _move_step(self, offset):
+        row = self.steps_list.currentRow()
+        destination = row + int(offset)
+        if row < 0 or not 0 <= destination < self.steps_list.count():
+            return
+        item = self.steps_list.takeItem(row)
+        self.steps_list.insertItem(destination, item)
+        self.steps_list.setCurrentRow(destination)
 
     def _append_step(self, step):
         operation = str(step.get("operation", ""))
@@ -5422,6 +5483,10 @@ class TextPikApp(QObject):
             self.popup.show_inline_result("OCR", "Tesseract no está instalado")
             return
 
+        portal_available = (
+            "org.freedesktop.portal.Desktop" in self._desktop_dbus_services()
+        )
+
         def capture_and_recognize():
             with tempfile.TemporaryDirectory(prefix="textpik-ocr-") as temporary:
                 target = Path(temporary) / "region.png"
@@ -5440,10 +5505,12 @@ class TextPikApp(QObject):
                     subprocess.run(
                         ["grim", "-g", region, str(target)], timeout=20, check=True
                     )
+                elif portal_available:
+                    capture_xdg_screenshot(target, timeout_seconds=90)
                 else:
                     raise RuntimeError(
                         "No hay adaptador de captura: instala Spectacle, "
-                        "gnome-screenshot o grim+slurp"
+                        "gnome-screenshot, grim+slurp o XDG Screenshot Portal"
                     )
                 return self.ocr.recognize(target)
 
@@ -6156,6 +6223,24 @@ exec bash -i
 
 
 def main(argv):
+    if len(argv) >= 2 and argv[1] in {"--version", "version"}:
+        print(f"TextPik {APP_VERSION}")
+        return 0
+    if len(argv) >= 2 and argv[1] in {"--self-check", "--self-check-gui"}:
+        # Headless package checks do not run an accessibility bus. Avoid AT-SPI
+        # attempting to abort before the offscreen Qt platform can initialize.
+        os.environ.setdefault("NO_AT_BRIDGE", "1")
+        checks = {
+            "version": APP_VERSION,
+            "actions": ACTIONS_ASSETS_DIR.is_dir(),
+            "application_icon": APP_ICON_FILE.is_file(),
+            "qt_dbus": qt_dbus_available(),
+        }
+        if argv[1] == "--self-check-gui":
+            probe_app = QApplication.instance() or QApplication([])
+            checks["qt_platform"] = bool(probe_app.platformName())
+        print(json.dumps(checks, ensure_ascii=False, sort_keys=True))
+        return 0 if all(value for key, value in checks.items() if key != "version") else 1
     if len(argv) >= 2 and argv[1] == "run":
         settings = load_settings()
         setup_logging(settings)

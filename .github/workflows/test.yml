@@ -65,7 +65,11 @@ jobs:
             debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools
       - run: desktop-file-validate packaging/textpik.desktop
       - run: appstreamcli validate --no-net packaging/io.github.pitydah.textpik.metainfo.xml
-      - run: bash -n packaging/install.sh packaging/run.sh packaging/appimage/build.sh packaging/debian/build.sh packaging/rpm/build.sh
+      - run: >-
+          bash -n packaging/install.sh packaging/run.sh
+          packaging/appimage/build.sh packaging/appimage/build-container.sh
+          packaging/arch/build-container.sh packaging/flatpak/build.sh
+          packaging/debian/build.sh packaging/rpm/build.sh
       - run: python -m json.tool packaging/flatpak/io.github.pitydah.textpik.json >/dev/null
       - run: python scripts/check_release.py
       - name: Build and inspect Debian package

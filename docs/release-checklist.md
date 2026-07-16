@@ -32,7 +32,8 @@ dragging and multi-file selections never expose a popup.
 
 ## Distribution matrix
 
-- Install, launch and uninstall the DEB on the current Ubuntu or Debian stable.
+- Install, launch and uninstall the DEB on the current Debian stable.
+- Run the private-venv installer and a portable artifact on Ubuntu LTS.
 - Install, launch and uninstall the RPM on the current Fedora release.
 - Build and install the Arch package in a clean chroot.
 - Build the Flatpak manifest and verify Wayland/X11 fallback behavior.
@@ -42,7 +43,8 @@ dragging and multi-file selections never expose a popup.
 
 Create `v0.5.0-rc.1` only after every automated gate and required manual entry is
 green. Promote to stable only after the RC has no unresolved P0/P1 defects during
-the agreed testing period. Record the four desktop checks, accessibility review,
-translation review and crash-free RC count in `release-validation.json`.
+the agreed testing period. Record the five desktop checks, seven distribution
+checks, accessibility review, translation review and crash-free RC count in
+`release-validation.json`.
 `scripts/check_release.py` rejects stable-version metadata until that evidence is
 complete, while RC builds remain available for gathering it.

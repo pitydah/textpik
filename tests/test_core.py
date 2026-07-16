@@ -29,6 +29,7 @@ from src.textpik import (
     desktop_environment,
     is_kde,
     load_settings,
+    main,
     normalize_settings,
     normalize_url,
     validate_actions,
@@ -36,6 +37,17 @@ from src.textpik import (
 
 
 class CoreHelpersTest(unittest.TestCase):
+    def test_version_and_runtime_self_check_do_not_start_gui(self):
+        with patch("builtins.print") as output:
+            self.assertEqual(main(["textpik", "--version"]), 0)
+            self.assertIn(APP_VERSION, output.call_args.args[0])
+        with patch("builtins.print") as output:
+            self.assertEqual(main(["textpik", "--self-check"]), 0)
+            payload = json.loads(output.call_args.args[0])
+            self.assertTrue(payload["actions"])
+            self.assertTrue(payload["application_icon"])
+            self.assertNotIn("qt_platform", payload)
+
     def test_unchanged_settings_are_not_rewritten_on_startup(self):
         with tempfile.TemporaryDirectory() as temp:
             config_dir = Path(temp)
@@ -386,6 +398,20 @@ class SettingsAboutTest(unittest.TestCase):
         self.assertEqual(flow["conditions"]["application"], "terminal")
         self.assertEqual(flow["conditions"]["text_types"], ["error", "code"])
         self.assertEqual(flow["steps"][0]["operation"], "replace")
+        dialog.close()
+
+    def test_visual_automation_editor_applies_and_reorders_templates(self):
+        dialog = AutomationEditDialog()
+        dialog.template_combo.setCurrentIndex(
+            dialog.template_combo.findData("quote")
+        )
+        dialog._apply_template()
+        self.assertEqual(dialog.steps_list.count(), 2)
+        self.assertEqual(dialog.name_edit.text(), "Entre comillas")
+        dialog.steps_list.setCurrentRow(1)
+        dialog._move_step(-1)
+        operations = [step["operation"] for step in dialog.get_flow()["steps"]]
+        self.assertEqual(operations, ["suffix", "prefix"])
         dialog.close()
 
 

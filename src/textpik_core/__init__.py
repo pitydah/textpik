@@ -29,7 +29,13 @@ from .planning import ContextSnapshot, plan_actions
 from .profiles import ContextProfile, normalize_profiles, resolve_profile
 from .settings import DEFAULT_SETTINGS, normalize_bool, normalize_settings
 from .spelling import SpellingResult, SpellingService
-from .automation import AutomationPreview, automation_matches, preview_automation
+from .automation import (
+    AUTOMATION_TEMPLATES,
+    AutomationPreview,
+    automation_matches,
+    automation_template,
+    preview_automation,
+)
 from .grammar import GrammarSuggestion, LanguageToolService, apply_suggestions
 from .history import HistoryEntry, HistoryStore
 from .insights import InlineInsight, local_insight, safe_calculate, text_statistics
@@ -38,6 +44,12 @@ from .undo import UndoManager, UndoRecord
 from .providers import OllamaProvider, ProviderResponse, TesseractProvider
 from .wasi import run_wasi
 from .health import CrashSentinel, PreviousRun
+from .portal import (
+    capture_xdg_screenshot,
+    portal_file_path,
+    portal_request_path,
+    portal_supports_area,
+)
 from .interaction import PopupComposition, plan_popup_composition, resolve_action_command
 from .utilities import (
     clean_terminal_text,
@@ -69,7 +81,9 @@ __all__ = [
     "SpellingResult",
     "SpellingService",
     "AutomationPreview",
+    "AUTOMATION_TEMPLATES",
     "automation_matches",
+    "automation_template",
     "preview_automation",
     "GrammarSuggestion",
     "LanguageToolService",
@@ -89,6 +103,10 @@ __all__ = [
     "run_wasi",
     "CrashSentinel",
     "PreviousRun",
+    "capture_xdg_screenshot",
+    "portal_file_path",
+    "portal_request_path",
+    "portal_supports_area",
     "PopupComposition",
     "plan_popup_composition",
     "resolve_action_command",

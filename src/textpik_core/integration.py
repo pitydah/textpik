@@ -31,6 +31,7 @@ def action_availability(
         which("spectacle")
         or which("gnome-screenshot")
         or (which("grim") and which("slurp"))
+        or "org.freedesktop.portal.Desktop" in services
     ):
         return ActionAvailability(False, "No hay capturador de región compatible")
     if command in {"klipper-save", "klipper-menu"}:

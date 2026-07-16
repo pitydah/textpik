@@ -1,0 +1,64 @@
+name: Extended distribution builds
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build from the Ubuntu 22.04 compatibility floor
+        env:
+          CONTAINER_ENGINE: docker
+        run: packaging/appimage/build-container.sh
+      - name: Run without the checkout on Ubuntu 24.04
+        run: |
+          docker run --rm \
+            -v "$PWD/dist/TextPik-x86_64.AppImage:/opt/TextPik.AppImage:ro" \
+            ubuntu:24.04 bash -lc '
+              apt-get update -qq
+              apt-get install -y -qq libegl1 libgl1 libglib2.0-0 libdbus-1-3
+              QT_QPA_PLATFORM=offscreen APPIMAGE_EXTRACT_AND_RUN=1 \
+                /opt/TextPik.AppImage --self-check-gui
+            '
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: textpik-appimage
+          path: dist/TextPik-x86_64.AppImage
+
+  arch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build in a clean Arch container
+        env:
+          CONTAINER_ENGINE: docker
+        run: packaging/arch/build-container.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: textpik-arch
+          path: dist/*.pkg.tar.zst
+
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install Flatpak builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub \
+            https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Build, install, self-check and uninstall
+        env:
+          TEXTPIK_FLATPAK_SMOKE: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: packaging/flatpak/build.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: textpik-flatpak
+          path: dist/TextPik.flatpak

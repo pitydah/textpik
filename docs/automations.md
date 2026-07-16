@@ -7,7 +7,9 @@ operación.
 
 Los mismos flujos pueden crearse y editarse en **Configuración → Acciones →
 Automatizaciones visuales**. El editor gráfico escribe este formato declarativo;
-nunca crea ni ejecuta comandos de shell.
+nunca crea ni ejecuta comandos de shell. Los pasos pueden reordenarse arrastrando
+o con los controles de movimiento. Las plantillas incluidas se copian al flujo,
+por lo que cada automatización puede modificarse de forma independiente.
 
 ```json
 {

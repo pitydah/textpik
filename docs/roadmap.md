@@ -63,6 +63,10 @@ loaded only after an explicit action.
   useful depth without resident dependencies.
 - A content-free crash sentinel identifies unclean shutdowns, and CI exercises
   500 popup lifecycles with bounded PSS and thread growth.
+- OCR region capture falls back to the XDG Screenshot portal through lazy
+  QtDBus, with race-free request handles and local-file validation.
+- The visual automation editor includes reusable safe templates and exact step
+  ordering through drag-and-drop or explicit move buttons.
 
 ## Next delivery gates
 
@@ -70,11 +74,8 @@ loaded only after an explicit action.
   `release-validation.json`.
 - Complete the human accessibility and translation reviews.
 - Finish two crash-free RC cycles without unresolved P0/P1 defects.
-- Build/install the Flatpak and AppImage on clean target systems.
-- Add visual drag reordering of steps and reusable automation templates; the
-  graphical editor and declarative engine are delivered.
-- Add an XDG Screenshot portal adapter for desktops without Spectacle,
-  GNOME Screenshot or grim/slurp.
+- Verify visible Flatpak/AppImage behavior on clean Wayland and X11 desktops;
+  automated clean-container build, install and self-check are delivered.
 - Evaluate a signed community catalog only after the WASI v2 runtime has passed
   an independent sandbox review.
 - Keep semantic history and cross-device synchronization out of the resident

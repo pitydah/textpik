@@ -10,6 +10,9 @@
 - Acciones locales de JSON, entidades, colores, slugs, limpieza de terminal,
   comparación con portapapeles y lectura en voz alta.
 - Marcador privado de cierres anómalos y gate CI de 500 ciclos del popup.
+- Captura de región OCR mediante XDG Screenshot Portal cargado bajo demanda.
+- Plantillas reutilizables y orden visual exacto de pasos de automatización.
+- Flatpak actualizado a KDE/PySide 6.9 y autodiagnóstico de paquetes.
 
 ## v0.5.0-rc.1 — 2026-07-14
 

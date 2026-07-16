@@ -11,12 +11,52 @@ from .models import SelectionContext
 MAX_STEPS = 16
 MAX_OUTPUT = 1_000_000
 
+AUTOMATION_TEMPLATES = (
+    {
+        "id": "clean-paragraph",
+        "name": "Limpiar párrafo",
+        "steps": (
+            {"operation": "remove-breaks"},
+            {"operation": "capitalize"},
+        ),
+    },
+    {
+        "id": "quote",
+        "name": "Entre comillas",
+        "steps": (
+            {"operation": "prefix", "value": "“"},
+            {"operation": "suffix", "value": "”"},
+        ),
+    },
+    {
+        "id": "markdown-code",
+        "name": "Código Markdown",
+        "steps": (
+            {"operation": "prefix", "value": "`"},
+            {"operation": "suffix", "value": "`"},
+        ),
+    },
+    {
+        "id": "list-item",
+        "name": "Elemento de lista",
+        "steps": ({"operation": "prefix", "value": "- "},),
+    },
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AutomationPreview:
     before: str
     after: str
     steps: tuple[str, ...]
+
+
+def automation_template(identifier: str) -> list[dict]:
+    """Return an independent mutable copy of a built-in safe template."""
+    for template in AUTOMATION_TEMPLATES:
+        if template["id"] == identifier:
+            return [dict(step) for step in template["steps"]]
+    raise ValueError("unknown automation template")
 
 
 def automation_matches(flow: dict, context: SelectionContext, text_types) -> bool:

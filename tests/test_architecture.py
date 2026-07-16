@@ -532,6 +532,19 @@ class SpellingServiceTest(unittest.TestCase):
 
 
 class IntegrationPolicyTest(unittest.TestCase):
+    @patch(
+        "src.textpik_core.integration.which",
+        side_effect=lambda name: "/usr/bin/tesseract" if name == "tesseract" else None,
+    )
+    def test_ocr_region_accepts_xdg_screenshot_portal(self, _which):
+        status = action_availability(
+            "ocr-region",
+            wayland=True,
+            kde=False,
+            dbus_services={"org.freedesktop.portal.Desktop"},
+        )
+        self.assertTrue(status.available)
+
     @patch("src.textpik_core.integration.which", return_value=None)
     def test_paste_degrades_to_clipboard_without_injection_tool(self, _which):
         status = action_availability(

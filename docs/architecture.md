@@ -72,6 +72,11 @@ adapters. Optional providers such as LanguageTool, OCR or local AI must be
 discovered and invoked on demand; they must never become resident dependencies
 of the core process.
 
+Region OCR tries native desktop capture tools first and then the XDG Screenshot
+portal. The portal adapter is imported only for the explicit action, subscribes
+to the predictable request path before calling D-Bus, accepts only a successful
+local `file://` result and copies it into TextPik's private temporary directory.
+
 The spelling contract follows that rule: it accepts an injected dictionary,
 loads the optional system provider only on the first explicit spelling request,
 caches only dictionary handles, and never retains selected text.

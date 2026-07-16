@@ -133,11 +133,12 @@ Distribution support:
 |--------|--------|
 | Arch / CachyOS / Manjaro | Primary target |
 | Fedora KDE Spin | Supported |
-| KDE neon / Kubuntu 24.04+ | Supported |
-| Debian 13 KDE | Supported |
+| KDE neon / Kubuntu 24.04+ | AppImage, Flatpak or private-venv installer |
 | openSUSE Tumbleweed KDE | Supported |
-| Debian 13 / Ubuntu 24.04+ | Supported through modular PySide6 packages |
-| Fedora / CentOS Stream | Supported; EPEL or pip may be needed on CentOS |
+| Debian 13 | Native DEB with modular PySide6 packages |
+| Ubuntu 24.04+ | AppImage, Flatpak or isolated per-user PySide6 environment |
+| Fedora | Native RPM |
+| CentOS Stream | AppImage recommended; desktop dependencies vary by release |
 | Alpine Linux | Supported through `apk` |
 | Void Linux | Supported through `xbps-install` |
 | Slackware | Community support; SlackBuilds required for desktop tools |
@@ -161,7 +162,7 @@ monitoring uses X11 PRIMARY or the standard Wayland `wl-clipboard` protocol.
   Ubuntu, Fedora, CentOS, openSUSE, Alpine, Void and Slackware. Files are copied to
   `~/.local/share/textpik`, so the original checkout can be moved or deleted.
 - `packaging/arch/PKGBUILD`: native Arch package with optional integrations.
-- `packaging/debian`: Debian/Ubuntu source package metadata. Build it with
+- `packaging/debian`: Debian 13 source package metadata. Build it with
   `packaging/debian/build.sh`; resulting packages are written to `dist/`.
 - `packaging/rpm/textpik.spec`: Fedora/RHEL-family RPM recipe. Build it from a
   committed tree with `packaging/rpm/build.sh`; packages are written to `dist/`.
@@ -169,8 +170,10 @@ monitoring uses X11 PRIMARY or the standard Wayland `wl-clipboard` protocol.
   by software centers and native packages.
 - `packaging/flatpak/io.github.pitydah.textpik.json`: KDE/PySide Flatpak
   manifest with `wl-clipboard` bundled for primary-selection monitoring.
-- `packaging/appimage/build.sh`: self-contained AppImage build using
-  PyInstaller.
+- `packaging/appimage/build-container.sh`: reproducible AppImage build on the
+  Ubuntu 22.04 compatibility floor.
+- `packaging/arch/build-container.sh`: clean Arch `makepkg` build.
+- `packaging/flatpak/build.sh`: bundle build with optional install/self-check.
 
 The source resolves assets from development checkouts, user installations,
 system packages, Flatpak and PyInstaller/AppImage layouts.
