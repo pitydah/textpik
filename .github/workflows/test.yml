@@ -72,7 +72,8 @@ jobs:
         run: |
           packaging/debian/build.sh
           dpkg-deb --info dist/textpik_*_all.deb
-          dpkg-deb --contents dist/textpik_*_all.deb | grep -q './usr/bin/textpik'
+          dpkg-deb --contents dist/textpik_*_all.deb > "$RUNNER_TEMP/textpik-deb-contents"
+          grep -q './usr/bin/textpik' "$RUNNER_TEMP/textpik-deb-contents"
       - name: Build and inspect Fedora packages
         run: |
           docker run --rm -v "$PWD:/source" -w /source fedora:latest bash -lc '
@@ -80,7 +81,8 @@ jobs:
             git config --global --add safe.directory /source
             packaging/rpm/build.sh
             rpm -qpi dist/textpik-*.noarch.rpm
-            rpm -qlp dist/textpik-*.noarch.rpm | grep -q /usr/bin/textpik
+            rpm -qlp dist/textpik-*.noarch.rpm > /tmp/textpik-rpm-contents
+            grep -q /usr/bin/textpik /tmp/textpik-rpm-contents
           '
 
   x11-smoke:
