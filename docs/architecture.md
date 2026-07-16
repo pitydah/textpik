@@ -29,6 +29,16 @@ Popup placement scores at most five candidates. It heavily penalizes covering
 the selection or cursor, then considers edge clamping and distance. This keeps
 placement stable and constant-time near monitor edges.
 
+`textpik_core.interaction` owns modifier resolution and bounded one/two-row
+composition. `textpik_core.utilities` contains dependency-free local actions,
+while `textpik_core.health` persists only process metadata required to detect an
+unclean shutdown. None imports Qt or probes the desktop.
+
+Adaptive delay is calculated from application, role, editability, selection
+length and event churn. Automation regex conditions reject backreferences,
+lookarounds and nested quantified groups, and output is capped at one million
+characters.
+
 Persisted defaults, bounds and migrations live in `textpik_core.settings`.
 Toolkit-specific color validation is injected by the Qt boundary, so loading or
 testing the settings schema never initializes a graphical runtime.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import shlex
 from urllib.parse import quote_plus, urlparse
@@ -85,6 +86,19 @@ def classify_text(text: str) -> frozenset[str]:
         types.add("number")
     if re.fullmatch(r"#[0-9a-fA-F]{3,8}", stripped):
         types.add("color")
+    if re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}",
+        stripped,
+    ):
+        types.add("uuid")
+    if re.fullmatch(r"[0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", stripped):
+        types.add("hash")
+    if stripped[:1] in "[{" and stripped[-1:] in "]}":
+        try:
+            json.loads(stripped)
+            types.add("json")
+        except (ValueError, TypeError):
+            pass
     if re.fullmatch(r"-?\d{1,3}(?:\.\d+)?\s*,\s*-?\d{1,3}(?:\.\d+)?", stripped):
         latitude, longitude = (float(value.strip()) for value in stripped.split(","))
         if -90 <= latitude <= 90 and -180 <= longitude <= 180:

@@ -19,6 +19,7 @@ from src.textpik_core.anchors import (
     place_popup,
     sway_cursor_anchor,
     stabilize_popup_position,
+    scale_anchor,
 )
 from src.textpik_core.extensions import inspect_local_extensions, load_local_extensions
 from src.textpik_core.atspi import AtspiSelectionBackend
@@ -290,7 +291,7 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_background_color": "#123456",
             }
         )
-        self.assertEqual(migrated["ui_version"], 3)
+        self.assertEqual(migrated["ui_version"], 4)
         self.assertEqual(migrated["popup_icon_size"], 17)
         self.assertEqual(migrated["popup_spacing"], 2)
         self.assertEqual(migrated["popup_background_color"], "#123456")
@@ -374,6 +375,15 @@ class AnchorTest(unittest.TestCase):
         high = PopupAnchor(8, 9, AnchorSource.ATSPI_SELECTION, 1.0)
         self.assertEqual(resolver.resolve([low, high]), high)
 
+    def test_resolver_explains_source_and_normalizes_scale(self):
+        qt = PopupAnchor(10, 20, AnchorSource.QT_POINTER, 0.9)
+        atspi = PopupAnchor(11, 21, AnchorSource.ATSPI_SELECTION, 0.85)
+        decision = AnchorResolver().resolve_with_reason((qt, atspi))
+        self.assertEqual(decision.anchor, atspi)
+        self.assertEqual(decision.reason, "atspi-selection")
+        scaled = scale_anchor(atspi, 1.5)
+        self.assertEqual((scaled.x, scaled.y), (16, 32))
+
     @patch("src.textpik_core.anchors.shutil.which", return_value="/usr/bin/hyprctl")
     @patch("src.textpik_core.anchors._run_json", return_value={"x": 12.4, "y": 33.8})
     def test_hyprland_adapter(self, _run, _which):
@@ -422,6 +432,13 @@ class AnchorTest(unittest.TestCase):
 
 
 class SelectionPolicyTest(unittest.TestCase):
+    def test_collapsed_accessibility_range_is_rejected(self):
+        context = SelectionContext("hola", selection_start=3, selection_end=3)
+        self.assertEqual(
+            evaluate_selection_intent(context, context.text).reason,
+            "collapsed-selection",
+        )
+
     def test_file_item_is_ignored_but_file_manager_text_is_allowed(self):
         file_item = SelectionContext(
             "report.pdf", application="Dolphin", role="list item"

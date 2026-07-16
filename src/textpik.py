@@ -52,7 +52,20 @@ try:
     )
     from textpik_core.planning import ContextSnapshot, plan_actions
     from textpik_core.profiles import resolve_profile
-    from textpik_core.selection import evaluate_selection_intent
+    from textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
+    from textpik_core.interaction import (
+        modifier_key,
+        plan_popup_composition,
+        resolve_action_command,
+    )
+    from textpik_core.utilities import (
+        clean_terminal_text,
+        color_details,
+        compare_text,
+        extract_entities,
+        format_json,
+        slugify,
+    )
     from textpik_core.spelling import SpellingService
     from textpik_core.grammar import LanguageToolService, apply_suggestions
     from textpik_core.insights import local_insight, text_statistics
@@ -60,6 +73,7 @@ try:
     from textpik_core.undo import UndoManager
     from textpik_core.providers import OllamaProvider, TesseractProvider
     from textpik_core.history import HistoryStore
+    from textpik_core.health import CrashSentinel
     from textpik_core.automation import automation_matches, preview_automation
     from textpik_core.wasi import run_wasi
     from textpik_core.settings import (
@@ -102,7 +116,20 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     )
     from .textpik_core.planning import ContextSnapshot, plan_actions
     from .textpik_core.profiles import resolve_profile
-    from .textpik_core.selection import evaluate_selection_intent
+    from .textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
+    from .textpik_core.interaction import (
+        modifier_key,
+        plan_popup_composition,
+        resolve_action_command,
+    )
+    from .textpik_core.utilities import (
+        clean_terminal_text,
+        color_details,
+        compare_text,
+        extract_entities,
+        format_json,
+        slugify,
+    )
     from .textpik_core.spelling import SpellingService
     from .textpik_core.grammar import LanguageToolService, apply_suggestions
     from .textpik_core.insights import local_insight, text_statistics
@@ -110,6 +137,7 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.undo import UndoManager
     from .textpik_core.providers import OllamaProvider, TesseractProvider
     from .textpik_core.history import HistoryStore
+    from .textpik_core.health import CrashSentinel
     from .textpik_core.automation import automation_matches, preview_automation
     from .textpik_core.wasi import run_wasi
     from .textpik_core.settings import (
@@ -294,6 +322,7 @@ AUTOSTART_FILE = Path.home() / ".config" / "autostart" / "textpik.desktop"
 PERMISSIONS_FILE = CONFIG_DIR / "permissions.json"
 EXTENSIONS_DIR = Path.home() / ".local" / "share" / APP_NAME / "extensions"
 LOG_FILE = CACHE_DIR / "textpik.log"
+RUN_SENTINEL_FILE = CACHE_DIR / "running.json"
 RANKING_FILE = CONFIG_DIR / "ranking.json"
 HISTORY_FILE = CONFIG_DIR / "history.json"
 AUTOMATIONS_FILE = CONFIG_DIR / "automations.json"
@@ -448,24 +477,78 @@ DEFAULT_ACTIONS = [
         "icon": "uppercase.svg",
         "cmd": "uppercase",
         "enabled": True,
+        "variants": {"alt": "copy-transform:uppercase"},
     },
     {
         "name": "minusculas",
         "icon": "lowercase.svg",
         "cmd": "lowercase",
         "enabled": True,
+        "variants": {"alt": "copy-transform:lowercase"},
     },
     {
         "name": "Capitalizar",
         "icon": "capitalize.svg",
         "cmd": "capitalize",
         "enabled": True,
+        "variants": {"alt": "copy-transform:capitalize"},
     },
     {
         "name": "Quitar saltos",
         "icon": "remove-breaks.svg",
         "cmd": "remove-breaks",
         "enabled": True,
+        "variants": {"alt": "copy-transform:remove-breaks"},
+    },
+    {
+        "name": "Formatear JSON",
+        "icon": "capitalize.svg",
+        "cmd": "format-json",
+        "enabled": True,
+        "context": ["json"],
+        "variants": {"alt": "minify-json"},
+    },
+    {
+        "name": "Extraer datos",
+        "icon": "counter.svg",
+        "cmd": "extract-entities",
+        "enabled": True,
+        "context": ["text", "url", "email"],
+    },
+    {
+        "name": "Convertir color",
+        "icon": "counter.svg",
+        "cmd": "color-details",
+        "enabled": True,
+        "context": ["color"],
+    },
+    {
+        "name": "Crear slug",
+        "icon": "remove-breaks.svg",
+        "cmd": "slugify",
+        "enabled": True,
+        "context": ["text"],
+    },
+    {
+        "name": "Limpiar salida de terminal",
+        "icon": "terminal.svg",
+        "cmd": "clean-terminal",
+        "enabled": True,
+        "context": ["error", "code", "text"],
+    },
+    {
+        "name": "Comparar con portapapeles",
+        "icon": "counter.svg",
+        "cmd": "compare-clipboard",
+        "enabled": True,
+        "context": ["text", "code", "json"],
+    },
+    {
+        "name": "Leer en voz alta",
+        "icon": "dictionary.svg",
+        "cmd": "speak",
+        "enabled": True,
+        "context": ["text"],
     },
     {
         "name": "Diccionario RAE",
@@ -927,7 +1010,13 @@ class BaseSelectionMonitor(QObject):
                 return
             self._scheduled_revision = revision
             self._force_emit = self._force_emit or force_emit
-            delay = max(70, int(self.settings.get("popup_delay_ms", 0)))
+            configured = int(self.settings.get("popup_delay_ms", 0))
+            if self.settings.get("adaptive_delay_enabled", True):
+                configured = max(
+                    configured,
+                    int(self.settings.get("adaptive_delay_min_ms", 55)),
+                )
+            delay = max(45, configured)
             self.timer_debounce.start(delay)
 
     def _selection_event(self, *args):
@@ -1699,7 +1788,7 @@ class PopupWindow(QWidget):
         self.root_layout = QVBoxLayout(self)
         self.root_layout.setContentsMargins(0, 0, 0, 0)
         self.root_layout.setSpacing(0)
-        self.buttons_layout = QHBoxLayout()
+        self.buttons_layout = QGridLayout()
         self.root_layout.addLayout(self.buttons_layout)
         self.insight_card = QLabel(self)
         self.insight_card.setObjectName("insightCard")
@@ -1814,6 +1903,7 @@ class PopupWindow(QWidget):
             self.settings.get("max_popup_actions", 8),
             self.settings.get("show_all_popup_actions", False),
             self.settings.get("show_numeric_badges", False),
+            self.settings.get("popup_allow_two_rows", True),
             compact,
             available_width,
             tuple(
@@ -1822,6 +1912,7 @@ class PopupWindow(QWidget):
                     action["icon"],
                     action["cmd"],
                     tuple(action.get("context", [])),
+                    tuple(sorted(action.get("variants", {}).items())),
                 )
                 for action in actions
             ),
@@ -1854,20 +1945,27 @@ class PopupWindow(QWidget):
             if self.settings.get("show_all_popup_actions", False)
             else self.settings.get("max_popup_actions", 8)
         )
+        compact_limit = None
         if (
             compact
             and self.settings.get("adaptive_popup", True)
             and not self.settings.get("show_all_popup_actions", False)
         ):
-            requested = min(
-                requested,
-                self.settings.get("popup_compact_actions", 4),
-            )
-        direct_count = min(len(self.actions), requested, screen_capacity)
-        has_overflow = len(self.actions) > direct_count
-        if has_overflow and direct_count >= screen_capacity:
-            direct_count = max(3, screen_capacity - 1)
+            compact_limit = self.settings.get("popup_compact_actions", 4)
+        composition = plan_popup_composition(
+            len(self.actions),
+            requested=requested,
+            row_capacity=screen_capacity,
+            compact_limit=compact_limit,
+            allow_two_rows=self.settings.get("popup_allow_two_rows", True),
+        )
+        direct_count = composition.direct_count
+        has_overflow = composition.overflow_count > 0
         self.visible_actions = self.actions[:direct_count]
+
+        def add_to_grid(widget, slot):
+            row, column = divmod(slot, composition.columns)
+            self.buttons_layout.addWidget(widget, row, column)
 
         variant = getattr(self, "icon_variant", None)
         for i, action in enumerate(self.visible_actions):
@@ -1887,7 +1985,8 @@ class PopupWindow(QWidget):
             else:
                 button.setIcon(icon)
             shortcut = f"{i + 1}: " if i < 9 else ""
-            button.setToolTip(f"{shortcut}{action['name']}")
+            variant_hint = " · Alt: variante" if action.get("variants") else ""
+            button.setToolTip(f"{shortcut}{action['name']}{variant_hint}")
             button.setAccessibleName(action["name"])
             button.setAccessibleDescription(
                 f"Ejecutar {action['name']} sobre el texto seleccionado"
@@ -1897,11 +1996,10 @@ class PopupWindow(QWidget):
             button.setFlat(True)
             button.setFocusPolicy(Qt.NoFocus)
             button.setCursor(Qt.PointingHandCursor)
-            command = action["cmd"]
             button.clicked.connect(
-                lambda checked=False, cmd=command: self._on_click(cmd)
+                lambda checked=False, action=action: self._on_click(action)
             )
-            self.buttons_layout.addWidget(button)
+            add_to_grid(button, i)
             self._action_buttons.append(button)
             if self.settings.get("show_numeric_badges", False) and i < 9:
                 badge = QLabel(str(i + 1), button)
@@ -1916,7 +2014,6 @@ class PopupWindow(QWidget):
                 badge.show()
 
         if has_overflow:
-            self.buttons_layout.addSpacing(2)
             more_button = MoreActionsButton(self.icon_color)
             self._more_button = more_button
             more_button.setObjectName("moreActions")
@@ -1935,7 +2032,7 @@ class PopupWindow(QWidget):
                     values, button
                 )
             )
-            self.buttons_layout.addWidget(more_button)
+            add_to_grid(more_button, direct_count)
 
         self.buttons_layout.activate()
         self.adjustSize()
@@ -1976,7 +2073,17 @@ class PopupWindow(QWidget):
     def set_context(self, context):
         self._application = str(getattr(context, "application", "") or "").strip()
 
-    def _on_click(self, cmd):
+    def _on_click(self, action):
+        if isinstance(action, dict):
+            modifiers = QApplication.keyboardModifiers()
+            variant = modifier_key(
+                shift=bool(modifiers & Qt.ShiftModifier),
+                control=bool(modifiers & Qt.ControlModifier),
+                alt=bool(modifiers & Qt.AltModifier),
+            )
+            cmd = resolve_action_command(action, variant)
+        else:
+            cmd = str(action)
         text = self.monitor.get_last_text() if self.monitor else ""
         self.hide()
         self.action_triggered.emit(cmd, text)
@@ -2018,12 +2125,12 @@ class PopupWindow(QWidget):
             return
         if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             if 0 <= self._keyboard_index < len(self.visible_actions):
-                self._on_click(self.visible_actions[self._keyboard_index]["cmd"])
+                self._on_click(self.visible_actions[self._keyboard_index])
                 return
         if Qt.Key_1 <= key <= Qt.Key_9:
             idx = key - Qt.Key_1
             if idx < len(self.visible_actions):
-                self._on_click(self.visible_actions[idx]["cmd"])
+                self._on_click(self.visible_actions[idx])
                 return
         if key == Qt.Key_Escape:
             self.hide()
@@ -2066,6 +2173,7 @@ class PopupWindow(QWidget):
                     avoid_rect,
                     self.settings.get("popup_cursor_gap", 6),
                     pointer_direction,
+                    self.settings.get("popup_position_preference", "auto"),
                 )
             else:
                 if self.settings.get("popup_wayland_fallback_horizontal") == "cursor":
@@ -2435,6 +2543,148 @@ class ContextProfileDialog(QDialog):
         super().accept()
 
 
+class AutomationEditDialog(QDialog):
+    """Compact visual editor for shell-free declarative automations."""
+
+    OPERATIONS = (
+        "uppercase", "lowercase", "capitalize", "remove-breaks",
+        "replace", "prefix", "suffix",
+    )
+
+    def __init__(self, flow=None, parent=None):
+        super().__init__(parent)
+        flow = dict(flow or {})
+        self.setWindowTitle("Editar automatización" if flow else "Nueva automatización")
+        self.setMinimumSize(620, 590)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name_edit = QLineEdit(str(flow.get("name", "")), self)
+        form.addRow("Nombre", self.name_edit)
+        conditions = dict(flow.get("conditions", {}))
+        self.application_edit = QLineEdit(str(conditions.get("application", "")), self)
+        self.application_edit.setPlaceholderText("firefox, libreoffice, terminal…")
+        form.addRow("Aplicación contiene", self.application_edit)
+        self.types_edit = QLineEdit(", ".join(conditions.get("text_types", [])), self)
+        self.types_edit.setPlaceholderText("text, url, json, error…")
+        form.addRow("Tipos de texto", self.types_edit)
+        self.regex_edit = QLineEdit(str(conditions.get("regex", "")), self)
+        self.regex_edit.setPlaceholderText("Opcional · expresión regular de hasta 256 caracteres")
+        form.addRow("Patrón", self.regex_edit)
+        self.editable_combo = QComboBox(self)
+        self.editable_combo.addItem("Cualquier campo", None)
+        self.editable_combo.addItem("Solo editable", True)
+        self.editable_combo.addItem("Solo lectura", False)
+        editable = conditions.get("editable")
+        self.editable_combo.setCurrentIndex(0 if editable is None else (1 if editable else 2))
+        form.addRow("Edición", self.editable_combo)
+        layout.addLayout(form)
+
+        self.steps_list = QListWidget(self)
+        self.steps_list.setAlternatingRowColors(True)
+        for step in flow.get("steps", []):
+            self._append_step(dict(step))
+        layout.addWidget(self.steps_list, 1)
+
+        builder = QGridLayout()
+        self.operation_combo = QComboBox(self)
+        self.operation_combo.addItems(self.OPERATIONS)
+        self.source_edit = QLineEdit(self)
+        self.source_edit.setPlaceholderText("Texto de origen para replace")
+        self.value_edit = QLineEdit(self)
+        self.value_edit.setPlaceholderText("Valor, prefijo, sufijo o reemplazo")
+        add_step = QPushButton("Agregar paso", self)
+        add_step.clicked.connect(self._add_step)
+        remove_step = QPushButton("Eliminar paso", self)
+        remove_step.clicked.connect(self._remove_step)
+        builder.addWidget(self.operation_combo, 0, 0)
+        builder.addWidget(self.source_edit, 0, 1)
+        builder.addWidget(self.value_edit, 1, 1)
+        builder.addWidget(add_step, 0, 2)
+        builder.addWidget(remove_step, 1, 2)
+        layout.addLayout(builder)
+        note = QLabel(
+            "Las automatizaciones son locales, transaccionales y no ejecutan shell. "
+            "El resultado se previsualiza antes de reemplazar la selección.", self,
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedText")
+        layout.addWidget(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.identifier = str(flow.get("id", ""))
+
+    def _append_step(self, step):
+        operation = str(step.get("operation", ""))
+        detail = ""
+        if operation == "replace":
+            detail = f" · {step.get('source', '')!r} → {step.get('target', '')!r}"
+        elif operation in {"prefix", "suffix"}:
+            detail = f" · {step.get('value', '')!r}"
+        item = QListWidgetItem(f"{operation}{detail}", self.steps_list)
+        item.setData(Qt.UserRole, step)
+
+    def _add_step(self):
+        operation = self.operation_combo.currentText()
+        step = {"operation": operation}
+        if operation == "replace":
+            if not self.source_edit.text():
+                QMessageBox.warning(self, "Paso incompleto", "Indica el texto de origen.")
+                return
+            step.update(source=self.source_edit.text(), target=self.value_edit.text())
+        elif operation in {"prefix", "suffix"}:
+            step["value"] = self.value_edit.text()
+        self._append_step(step)
+        self.source_edit.clear()
+        self.value_edit.clear()
+
+    def _remove_step(self):
+        row = self.steps_list.currentRow()
+        if row >= 0:
+            self.steps_list.takeItem(row)
+
+    def get_flow(self):
+        name = self.name_edit.text().strip()
+        types = list(dict.fromkeys(
+            value.strip().casefold()
+            for value in self.types_edit.text().split(",")
+            if value.strip()
+        ))
+        conditions = {"text_types": types or ["text"]}
+        if self.application_edit.text().strip():
+            conditions["application"] = self.application_edit.text().strip()
+        if self.regex_edit.text().strip():
+            conditions["regex"] = self.regex_edit.text().strip()[:256]
+        editable = self.editable_combo.currentData()
+        if editable is not None:
+            conditions["editable"] = editable
+        steps = [
+            dict(self.steps_list.item(index).data(Qt.UserRole))
+            for index in range(self.steps_list.count())
+        ]
+        identifier = self.identifier or stable_action_id(name, json.dumps(steps, sort_keys=True))[:80]
+        return {
+            "id": identifier,
+            "name": name[:120],
+            "enabled": True,
+            "conditions": conditions,
+            "steps": steps,
+        }
+
+    def accept(self):
+        flow = self.get_flow()
+        if not flow["name"] or not flow["steps"]:
+            QMessageBox.warning(self, "Automatización incompleta", "Indica un nombre y al menos un paso.")
+            return
+        try:
+            preview_automation(flow, "Texto de prueba")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Automatización inválida", str(exc))
+            return
+        super().accept()
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings, actions, controller, parent=None):
         super().__init__(parent)
@@ -2538,6 +2788,13 @@ class SettingsDialog(QDialog):
         )
         self.popup_delay.setSuffix(" ms")
         beh_form.addRow("Retardo", self.popup_delay)
+        self.adaptive_delay = QCheckBox(
+            "Ajustar el retardo según aplicación y tipo de selección", self
+        )
+        self.adaptive_delay.setChecked(
+            bool(self.settings.get("adaptive_delay_enabled", True))
+        )
+        beh_form.addRow("Retardo inteligente", self.adaptive_delay)
         self.auto_hide = self._spin(
             0, 30000, int(self.settings.get("popup_auto_hide_ms", 5000))
         )
@@ -2550,6 +2807,19 @@ class SettingsDialog(QDialog):
         )
         self.cursor_gap.setSuffix(" px")
         beh_form.addRow("Distancia a la selección", self.cursor_gap)
+        self.position_preference = QComboBox(self)
+        for label, value in (
+            ("Automática", "auto"),
+            ("Preferir arriba", "above"),
+            ("Preferir abajo", "below"),
+            ("Preferir lateral", "side"),
+        ):
+            self.position_preference.addItem(label, value)
+        position_index = self.position_preference.findData(
+            self.settings.get("popup_position_preference", "auto")
+        )
+        self.position_preference.setCurrentIndex(max(0, position_index))
+        beh_form.addRow("Posición", self.position_preference)
         self.sticky_popup = QCheckBox(
             "Mantener popup hasta elegir accion o Escape", self
         )
@@ -2852,6 +3122,13 @@ class SettingsDialog(QDialog):
             lambda checked: self.max_popup_actions.setEnabled(not checked)
         )
         bar_form.addRow("Iconos directos", self.max_popup_actions)
+        self.popup_allow_two_rows = QCheckBox(
+            "Usar una segunda fila antes de enviar acciones al menú", self
+        )
+        self.popup_allow_two_rows.setChecked(
+            bool(self.settings.get("popup_allow_two_rows", True))
+        )
+        bar_form.addRow("Pantallas estrechas", self.popup_allow_two_rows)
         bar_note = QLabel(
             "La barra puede crecer hasta el ancho disponible de la pantalla. "
             "Más acciones contendrá únicamente el excedente real.",
@@ -2905,9 +3182,12 @@ class SettingsDialog(QDialog):
         automation_buttons = QHBoxLayout()
         add_automation = QPushButton("Crear flujo", self)
         add_automation.clicked.connect(self._add_automation)
+        edit_automation = QPushButton("Editar flujo", self)
+        edit_automation.clicked.connect(self._edit_automation)
         remove_automation = QPushButton("Eliminar flujo", self)
         remove_automation.clicked.connect(self._remove_automation)
         automation_buttons.addWidget(add_automation)
+        automation_buttons.addWidget(edit_automation)
         automation_buttons.addWidget(remove_automation)
         automation_buttons.addStretch()
         automation_layout.addLayout(automation_buttons)
@@ -3369,35 +3649,23 @@ class SettingsDialog(QDialog):
             self.automation_list.addItem(item)
 
     def _add_automation(self):
-        from PySide6.QtWidgets import QInputDialog
-
-        name, accepted = QInputDialog.getText(self, "Nuevo flujo", "Nombre:")
-        if not accepted or not name.strip():
+        dialog = AutomationEditDialog(parent=self)
+        if dialog.exec() != QDialog.Accepted:
             return
-        operations, accepted = QInputDialog.getText(
-            self,
-            "Pasos del flujo",
-            "Operaciones separadas por coma\n"
-            "(uppercase, lowercase, capitalize, remove-breaks):",
-        )
-        if not accepted:
-            return
-        allowed = {"uppercase", "lowercase", "capitalize", "remove-breaks"}
-        values = [value.strip() for value in operations.split(",") if value.strip()]
-        if not values or any(value not in allowed for value in values):
-            QMessageBox.warning(self, "Flujo inválido", "Hay operaciones no admitidas")
-            return
-        identifier = stable_action_id(name, ",".join(values))[:80]
-        self.automations.append(
-            {
-                "id": identifier,
-                "name": name.strip()[:120],
-                "enabled": True,
-                "conditions": {"text_types": ["text"]},
-                "steps": [{"operation": value} for value in values],
-            }
-        )
+        self.automations.append(dialog.get_flow())
         self._populate_automations()
+
+    def _edit_automation(self):
+        row = self.automation_list.currentRow()
+        if not 0 <= row < len(self.automations):
+            QMessageBox.information(self, "Editar flujo", "Selecciona un flujo primero.")
+            return
+        dialog = AutomationEditDialog(self.automations[row], self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.automations[row] = dialog.get_flow()
+        self._populate_automations()
+        self.automation_list.setCurrentRow(row)
 
     def _remove_automation(self):
         row = self.automation_list.currentRow()
@@ -3415,8 +3683,12 @@ class SettingsDialog(QDialog):
         self.settings["popup_opacity"] = self.opacity.value() / 100
         self.settings["show_numeric_badges"] = self.show_numeric_badges.isChecked()
         self.settings["popup_delay_ms"] = self.popup_delay.value()
+        self.settings["adaptive_delay_enabled"] = self.adaptive_delay.isChecked()
         self.settings["popup_auto_hide_ms"] = self.auto_hide.value()
         self.settings["popup_cursor_gap"] = self.cursor_gap.value()
+        self.settings["popup_position_preference"] = (
+            self.position_preference.currentData()
+        )
         self.settings["confirm_terminal_execution"] = self.confirm_terminal.isChecked()
         self.settings["enable_wayland_polling"] = self.enable_wl_polling.isChecked()
         self.settings["popup_wayland_fallback_top"] = self.fallback_top.value()
@@ -3428,6 +3700,7 @@ class SettingsDialog(QDialog):
         self.settings["show_all_popup_actions"] = (
             self.show_all_popup_actions.isChecked()
         )
+        self.settings["popup_allow_two_rows"] = self.popup_allow_two_rows.isChecked()
         self.settings["show_on_selection"] = self.show_on_selection.isChecked()
         self.settings["start_at_login"] = self.start_at_login.isChecked()
         self.settings["disable_in_games"] = self.disable_in_games.isChecked()
@@ -3556,6 +3829,14 @@ class TextPikApp(QObject):
                 )
             sys.exit(0)
 
+        self.crash_sentinel = CrashSentinel(RUN_SENTINEL_FILE)
+        self.previous_run = self.crash_sentinel.start(APP_VERSION)
+        if self.previous_run.unclean:
+            logger.warning(
+                "La ejecución anterior no registró un cierre limpio (versión %s)",
+                self.previous_run.version or "desconocida",
+            )
+
         check_runtime_dependencies()
         self.cursor_bridge = None
         self.cursor_bridge_adaptor = None
@@ -3583,6 +3864,13 @@ class TextPikApp(QObject):
             "textpik-history",
             "ocr-image",
             "ocr-region",
+            "format-json",
+            "extract-entities",
+            "color-details",
+            "slugify",
+            "clean-terminal",
+            "compare-clipboard",
+            "speak",
         }
         existing_commands = {action.get("cmd") for action in self.actions}
         added_core_action = False
@@ -3597,6 +3885,19 @@ class TextPikApp(QObject):
                     existing_commands.add(migrated["cmd"])
                     added_core_action = True
         if added_core_action:
+            self.save_actions()
+        default_variants = {
+            action["cmd"]: action.get("variants", {})
+            for action in DEFAULT_ACTIONS
+            if action.get("variants")
+        }
+        variants_migrated = False
+        for action in self.actions:
+            variants = default_variants.get(action.get("cmd"))
+            if variants and not action.get("variants"):
+                action["variants"] = dict(variants)
+                variants_migrated = True
+        if variants_migrated:
             self.save_actions()
         extension_actions, self.extension_issues = inspect_local_extensions(
             EXTENSIONS_DIR
@@ -3679,6 +3980,7 @@ class TextPikApp(QObject):
         self._last_intent_confidence = 0.0
         self._last_context_profile = ""
         self._last_text_types = frozenset()
+        self._last_anchor_decision = "sin ancla"
         self._last_atspi_signature = None
         self._pending_atspi_node = None
         self._runtime_probe_running = False
@@ -3786,6 +4088,8 @@ class TextPikApp(QObject):
 
     def setup_hotkey(self):
         self.teardown_hotkey()
+        if hasattr(self, "crash_sentinel"):
+            self.crash_sentinel.clean()
         if not self.settings.get("enable_global_hotkey", False):
             return
         try:
@@ -3906,10 +4210,13 @@ class TextPikApp(QObject):
         if not self.monitor._active or self.popup.is_interacting():
             return
         session_id = self._begin_selection_session("atspi-event")
-        self._pending_atspi_node = (node, session_id)
+        self._pending_atspi_node = (node, session_id, time.monotonic())
         # Accessibility events can arrive before the final range is committed.
         self.popup_state.transition(PopupPhase.STABILIZING)
-        self.atspi_event_timer.start(max(45, self.settings.get("popup_delay_ms", 0)))
+        delay = max(45, self.settings.get("popup_delay_ms", 0))
+        if self.settings.get("adaptive_delay_enabled", True):
+            delay = max(delay, self.settings.get("adaptive_delay_min_ms", 55))
+        self.atspi_event_timer.start(delay)
 
     def _finish_popup_interaction(self):
         if self.popup.isVisible():
@@ -3924,16 +4231,28 @@ class TextPikApp(QObject):
         pending, self._pending_atspi_node = self._pending_atspi_node, None
         if pending is None:
             return
-        node, session_id = pending
+        node, session_id, queued_at = pending
         if not self._selection_session_is_current(session_id):
             logger.debug("Evento AT-SPI obsoleto descartado: %s", session_id)
             return
-        context = self.atspi.read_selection(node)
+        context = node if isinstance(node, SelectionContext) else self.atspi.read_selection(node)
         if not self._selection_session_is_current(session_id):
             return
         if context is None or not context.text.strip():
             self.hide_popup(invalidate_session=False)
             return
+        if self.settings.get("adaptive_delay_enabled", True):
+            desired = adaptive_selection_delay(
+                context,
+                context.text,
+                base_ms=self.settings.get("adaptive_delay_min_ms", 55),
+            )
+            desired = min(desired, self.settings.get("adaptive_delay_max_ms", 180))
+            elapsed_ms = (time.monotonic() - queued_at) * 1000
+            if elapsed_ms + 4 < desired:
+                self._pending_atspi_node = (context, session_id, queued_at)
+                self.atspi_event_timer.start(max(5, round(desired - elapsed_ms)))
+                return
         if len(context.text.strip()) > self.settings.get("max_selection_length", 5000):
             self.hide_popup(invalidate_session=False)
             return
@@ -4237,9 +4556,12 @@ class TextPikApp(QObject):
             f"ydotool: {'ok' if check_command('ydotool') else 'falta'}",
             f"xdg-open: {'ok' if check_command('xdg-open') else 'falta'}",
             f"QtDBus: {'ok' if qt_dbus_available() else 'falta'}",
+            f"XDG Desktop Portal: {'ok' if 'org.freedesktop.portal.Desktop' in self._desktop_dbus_services() else 'falta'}",
+            f"Secret Service: {'ok' if 'org.freedesktop.secrets' in self._desktop_dbus_services() else 'falta'}",
             f"AT-SPI: {'ok' if self.atspi.available else 'falta'}",
             f"AT-SPI deteccion: {'eventos' if self.atspi_events_active else 'polling/fallback'}",
             f"Estado popup: {self.popup_state.phase.value}",
+            f"Cierre anterior: {'anómalo' if self.previous_run.unclean else 'limpio'}",
             f"Autoinicio: {'activo' if AUTOSTART_FILE.exists() else 'inactivo'}",
             f"Puente KWin: {bridge_status}",
             f"Popup visible: {'si' if self.popup.isVisible() else 'no'}",
@@ -4247,6 +4569,7 @@ class TextPikApp(QObject):
             f"Acciones habilitadas: {enabled_actions}/{len(self.actions)}",
             f"Extensiones rechazadas: {len(self.extension_issues)}",
             f"Confianza última selección: {self._last_intent_confidence:.0%}",
+            f"Proveedor de posición: {self._last_anchor_decision}",
             f"Perfil contextual: {self._last_context_profile or 'ninguno'}",
             *performance_lines,
             f"Log: {LOG_FILE}",
@@ -4493,12 +4816,16 @@ class TextPikApp(QObject):
             self.popup.clear_inline_result()
             self.popup.set_actions(visible, compact=compact_popup)
             pointer_anchor = self._fast_pointer_anchor()
-            anchor = self.anchor_resolver.resolve(
+            anchor_decision = self.anchor_resolver.resolve_with_reason(
                 (
                     self.selection_context.anchor,
                     self._runtime_snapshot.get("compositor_anchor"),
                     pointer_anchor,
                 )
+            )
+            anchor = anchor_decision.anchor
+            self._last_anchor_decision = (
+                f"{anchor_decision.reason} ({anchor_decision.considered} candidatos)"
             )
             if not self._selection_session_is_current(session_id):
                 return
@@ -4570,7 +4897,13 @@ class TextPikApp(QObject):
             from PySide6.QtDBus import QDBusConnection
 
             interface = QDBusConnection.sessionBus().interface()
-            for name in ("org.kde.klipper", "org.kde.kdeconnect"):
+            for name in (
+                "org.kde.klipper",
+                "org.kde.kdeconnect",
+                "org.gnome.Shell.Extensions.GSConnect",
+                "org.freedesktop.portal.Desktop",
+                "org.freedesktop.secrets",
+            ):
                 reply = interface.isServiceRegistered(name) if interface else None
                 if reply and reply.isValid() and bool(reply.value()):
                     services.add(name)
@@ -4625,7 +4958,13 @@ class TextPikApp(QObject):
     def execute_action(self, cmd, text):
         text = text or ""
         manifest = next(
-            (action for action in self.actions if action.get("cmd") == cmd), None
+            (
+                action
+                for action in self.actions
+                if action.get("cmd") == cmd
+                or cmd in action.get("variants", {}).values()
+            ),
+            None,
         )
         if manifest and not self._authorize_action(manifest):
             return
@@ -4687,6 +5026,83 @@ class TextPikApp(QObject):
                     self.selection_context.application,
                 )
                 self._show_toast("Selección reemplazada")
+            return
+
+        if cmd.startswith("copy-transform:"):
+            operation = cmd.split(":", 1)[1]
+            try:
+                QApplication.clipboard().setText(transform_text(operation, text))
+                self._show_toast("Transformación copiada sin reemplazar")
+            except ValueError as exc:
+                QMessageBox.warning(None, "Transformación", str(exc))
+            return
+
+        if cmd in {"slugify", "clean-terminal"}:
+            result = slugify(text) if cmd == "slugify" else clean_terminal_text(text)
+            replaced = self.atspi.replace_selection(self.selection_context, result)
+            if replaced:
+                self.undo.remember(text, result, self.selection_context.application)
+                self._show_toast("Selección reemplazada")
+            else:
+                QApplication.clipboard().setText(result)
+                self._show_toast("Resultado copiado; la app no permite reemplazo directo")
+            return
+
+        if cmd in {"format-json", "minify-json"}:
+            try:
+                result = format_json(text, compact=cmd == "minify-json")
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.popup.show_inline_result("JSON inválido", str(exc))
+                return
+            if self.atspi.replace_selection(self.selection_context, result):
+                self.undo.remember(text, result, self.selection_context.application)
+                self._show_toast("JSON actualizado")
+            else:
+                QApplication.clipboard().setText(result)
+                self._show_toast("JSON copiado")
+            return
+
+        if cmd == "extract-entities":
+            rendered = extract_entities(text).render()
+            self.popup.show_inline_result(
+                "Datos detectados",
+                rendered or "No se detectaron enlaces, correos ni teléfonos.",
+            )
+            return
+
+        if cmd == "color-details":
+            try:
+                self.popup.show_inline_result("Conversión de color", color_details(text))
+            except ValueError as exc:
+                self.popup.show_inline_result("Color no compatible", str(exc))
+            return
+
+        if cmd == "compare-clipboard":
+            other = QApplication.clipboard().text()
+            try:
+                difference = compare_text(text, other)
+            except ValueError as exc:
+                self.popup.show_inline_result("Comparación", str(exc))
+                return
+            self.popup.show_inline_result(
+                "Diferencias",
+                difference or "La selección y el portapapeles son iguales.",
+            )
+            return
+
+        if cmd == "speak":
+            executable = next(
+                (name for name in ("spd-say", "espeak-ng", "espeak") if check_command(name)),
+                None,
+            )
+            if executable is None:
+                self._show_toast("No hay motor de voz instalado")
+                return
+            try:
+                subprocess.Popen([executable, text[:20_000]])
+                self._show_toast("Lectura iniciada")
+            except OSError as exc:
+                QMessageBox.warning(None, "Lectura en voz alta", str(exc))
             return
 
         if cmd == "count":
@@ -5555,7 +5971,16 @@ exec bash -i
             "klipper": "org.kde.klipper" in services,
             "kdeconnect": (
                 check_command("kdeconnect-cli")
-                or "org.kde.kdeconnect" in services
+                or bool(
+                    {"org.kde.kdeconnect", "org.gnome.Shell.Extensions.GSConnect"}
+                    & services
+                )
+            ),
+            "xdg_desktop_portal": "org.freedesktop.portal.Desktop" in services,
+            "secret_service": "org.freedesktop.secrets" in services,
+            "anchor_provider": getattr(self, "_last_anchor_decision", "unknown"),
+            "previous_run_unclean": bool(
+                getattr(getattr(self, "previous_run", None), "unclean", False)
             ),
             "selection_session": self._selection_session,
             "popup_phase": self.popup_state.phase.value,

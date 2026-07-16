@@ -37,7 +37,9 @@ def action_availability(
         ready = kde and "org.kde.klipper" in services
         return ActionAvailability(ready, "Klipper no está disponible" if not ready else "Integración Klipper")
     if command == "kdeconnect":
-        ready = bool(which("kdeconnect-cli")) or "org.kde.kdeconnect" in services
+        ready = bool(which("kdeconnect-cli")) or bool(
+            {"org.kde.kdeconnect", "org.gnome.Shell.Extensions.GSConnect"} & services
+        )
         return ActionAvailability(
             ready,
             "KDE Connect no está disponible" if not ready else "Integración KDE Connect",
@@ -57,6 +59,8 @@ def action_availability(
         )
     ):
         return ActionAvailability(False, "No se encontró un emulador de terminal")
+    if command == "speak" and not (which("spd-say") or which("espeak-ng") or which("espeak")):
+        return ActionAvailability(False, "No hay motor de voz compatible")
     if command == "paste":
         tools = ("wtype", "ydotool") if wayland else ("xdotool",)
         if not any(which(tool) for tool in tools):

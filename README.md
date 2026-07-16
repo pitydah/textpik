@@ -14,7 +14,7 @@ copy, search, translate, open links, and more with one click.
 
 ## Features
 
-- 23 built-in actions: copy/paste, search, translation, text transforms,
+- 30+ built-in actions: copy/paste, search, translation, text transforms,
   on-demand spelling correction, terminal, print, Ollama, KDE Connect and Klipper
 - Context-aware filtering for URLs, email, code, numbers and regular text,
   while preserving the user's fixed order
@@ -23,6 +23,10 @@ copy, search, translate, open links, and more with one click.
 - Expandable popup with a user-defined number of direct actions, optional
   “show all” mode and drag-and-drop ordering; “More actions” contains only the
   real overflow and remains fuzzy-searchable
+- Optional two-row composition on narrow displays, placement preference and
+  Alt-based action variants without duplicating toolbar icons
+- Adaptive selection stabilization delays suspicious file-manager, terminal and
+  rapidly changing selections while keeping editable text fields immediate
 - Local inline calculations, unit conversions and text statistics without a
   network request
 - On-demand LanguageTool grammar review with before/after confirmation
@@ -30,8 +34,12 @@ copy, search, translate, open links, and more with one click.
 - Optional bounded private history, disabled by default and encryptable through
   `TEXTPIK_HISTORY_KEY`
 - Declarative shell-free automations and integrity-checked WASI extensions
+- Visual automation editor with application, text type, editability and regex
+  conditions plus replace/prefix/suffix and transformation steps
 - Local OCR for image files or screen regions through an external Tesseract
   installation
+- Local JSON formatting, entity extraction, color conversion, slug creation,
+  terminal-output cleaning, clipboard comparison and on-demand text-to-speech
 - Confidence-aware composition: incomplete desktop context gets a smaller bar,
   while clearly non-text or very low-confidence selections are suppressed
 - Constant-time candidate placement beside the pointer without covering the
@@ -40,6 +48,8 @@ copy, search, translate, open links, and more with one click.
 - File-manager awareness: file objects are ignored while text fields still work
 - Native desktop identity, XDG autostart management, AppStream metadata and
   system-tray active/paused status
+- Privacy-safe crash sentinel and richer capability diagnostics for portals,
+  Secret Service, selection backends and the active positioning provider
 - Capability-aware actions with clear status for CUPS, Ollama, terminals,
   KDE Connect, Klipper and automatic paste fallbacks
 - Native URL/file opening through Qt desktop services and sandbox portals

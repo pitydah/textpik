@@ -37,6 +37,16 @@ from .ranking import LocalActionRanker
 from .undo import UndoManager, UndoRecord
 from .providers import OllamaProvider, ProviderResponse, TesseractProvider
 from .wasi import run_wasi
+from .health import CrashSentinel, PreviousRun
+from .interaction import PopupComposition, plan_popup_composition, resolve_action_command
+from .utilities import (
+    clean_terminal_text,
+    color_details,
+    compare_text,
+    extract_entities,
+    format_json,
+    slugify,
+)
 from .storage import read_json, write_json_atomic
 from .text import build_command_argv, classify_text, normalize_url
 
@@ -77,6 +87,17 @@ __all__ = [
     "ProviderResponse",
     "TesseractProvider",
     "run_wasi",
+    "CrashSentinel",
+    "PreviousRun",
+    "PopupComposition",
+    "plan_popup_composition",
+    "resolve_action_command",
+    "clean_terminal_text",
+    "color_details",
+    "compare_text",
+    "extract_entities",
+    "format_json",
+    "slugify",
     "build_command_argv",
     "classify_text",
     "command_exists",

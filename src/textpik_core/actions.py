@@ -83,6 +83,13 @@ def migrate_action(raw: dict) -> dict | None:
     permissions = raw.get("permissions", [])
     if not isinstance(permissions, list) or any(p not in KNOWN_PERMISSIONS for p in permissions):
         return None
+    variants = raw.get("variants", {})
+    if not isinstance(variants, dict) or any(
+        key not in {"shift", "control", "alt", "control+alt", "control+shift", "alt+shift"}
+        or not isinstance(value, str) or not value.strip()
+        for key, value in variants.items()
+    ):
+        return None
     return {
         "id": raw.get("id") or stable_action_id(name, command),
         "name": name.strip(),
@@ -94,6 +101,7 @@ def migrate_action(raw: dict) -> dict | None:
         "context": [value for value in contexts if isinstance(value, str)],
         "permissions": permissions,
         "category": str(raw.get("category") or infer_category(name, command)),
+        "variants": dict(variants),
     }
 
 

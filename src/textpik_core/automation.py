@@ -9,6 +9,7 @@ from .actions import TRANSFORMS, transform_text
 from .models import SelectionContext
 
 MAX_STEPS = 16
+MAX_OUTPUT = 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +37,10 @@ def automation_matches(flow: dict, context: SelectionContext, text_types) -> boo
     if pattern:
         if len(pattern) > 256:
             return False
+        if re.search(r"\\[1-9]|\(\?[=!<]|\([^)]*[*+][^)]*\)[*+]", pattern):
+            return False
         try:
-            if re.search(pattern, context.text) is None:
+            if re.search(pattern, context.text[:20_000]) is None:
                 return False
         except re.error:
             return False
@@ -58,7 +61,7 @@ def preview_automation(flow: dict, text: str) -> AutomationPreview:
             current = transform_text(operation, current)
         elif operation == "replace":
             source, target = str(raw.get("source", "")), str(raw.get("target", ""))
-            if not source or len(source) > 256:
+            if not source or len(source) > 256 or len(target) > 1000:
                 raise ValueError("invalid replacement")
             current = current.replace(source, target)
         elif operation == "prefix":
@@ -67,5 +70,7 @@ def preview_automation(flow: dict, text: str) -> AutomationPreview:
             current += str(raw.get("value", ""))[:1000]
         else:
             raise ValueError(f"unsupported automation operation: {operation}")
+        if len(current) > MAX_OUTPUT:
+            raise ValueError("automation output is too large")
         executed.append(operation)
     return AutomationPreview(text, current, tuple(executed))

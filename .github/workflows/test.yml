@@ -33,6 +33,11 @@ jobs:
       - run: python scripts/check_performance.py
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Exercise 500 popup lifecycles
+        if: matrix.python == '3.11'
+        run: python scripts/check_app_stability.py
+        env:
+          QT_QPA_PLATFORM: offscreen
       - run: python -m py_compile src/textpik.py src/textpik_core/*.py
       - run: ruff check src tests scripts
       - name: Enforce core coverage

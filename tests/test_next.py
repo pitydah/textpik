@@ -19,6 +19,21 @@ from src.textpik_core.spelling import SpellingService
 from src.textpik_core.text import classify_text
 from src.textpik_core.undo import UndoManager
 from src.textpik_core.wasi import MAX_MEMORY_BYTES, run_wasi
+from src.textpik_core.health import CrashSentinel
+from src.textpik_core.interaction import (
+    modifier_key,
+    plan_popup_composition,
+    resolve_action_command,
+)
+from src.textpik_core.utilities import (
+    clean_terminal_text,
+    color_details,
+    compare_text,
+    extract_entities,
+    format_json,
+    slugify,
+)
+from src.textpik_core.selection import adaptive_selection_delay
 
 
 class InsightTest(unittest.TestCase):
@@ -39,6 +54,20 @@ class InsightTest(unittest.TestCase):
         self.assertIn("isbn", classify_text("978-3-16-148410-0"))
         self.assertIn("date", classify_text("2026-07-14"))
         self.assertIn("error", classify_text("RuntimeError: failed: test"))
+        self.assertIn("json", classify_text('{"ok": true}'))
+        self.assertIn("uuid", classify_text("550e8400-e29b-41d4-a716-446655440000"))
+        self.assertIn("hash", classify_text("a" * 64))
+
+    def test_lightweight_local_utilities(self):
+        self.assertEqual(format_json('{"b":1,"a":2}'), '{\n  "a": 2,\n  "b": 1\n}')
+        self.assertEqual(format_json('{"b":1}', compact=True), '{"b":1}')
+        self.assertEqual(slugify("Acción rápida"), "accion-rapida")
+        self.assertEqual(clean_terminal_text("\x1b[31mError\x1b[0m\r\n"), "Error\n")
+        self.assertIn("RGB 255, 0, 170", color_details("#f0a"))
+        self.assertIn("-uno", compare_text("uno", "dos"))
+        entities = extract_entities("Visita https://example.com o escribe a hi@example.com")
+        self.assertEqual(entities.urls, ("https://example.com",))
+        self.assertEqual(entities.emails, ("hi@example.com",))
 
 
 class WritingTest(unittest.TestCase):
@@ -72,6 +101,36 @@ class WritingTest(unittest.TestCase):
 
 
 class AutomationAndStateTest(unittest.TestCase):
+    def test_popup_composition_and_modifier_variants(self):
+        composition = plan_popup_composition(
+            20, requested=12, row_capacity=6, allow_two_rows=True,
+        )
+        self.assertEqual((composition.direct_count, composition.rows), (11, 2))
+        self.assertEqual(composition.overflow_count, 9)
+        self.assertEqual(modifier_key(shift=True, control=True), "control+shift")
+        action = {"cmd": "format-json", "variants": {"alt": "minify-json"}}
+        self.assertEqual(resolve_action_command(action, "alt"), "minify-json")
+        self.assertEqual(resolve_action_command(action, "shift"), "format-json")
+
+    def test_adaptive_delay_is_bounded_and_respects_context(self):
+        editor = SelectionContext("hola", application="Editor", role="text", editable=True)
+        files = SelectionContext("hola", application="Dolphin", role="text")
+        self.assertLess(
+            adaptive_selection_delay(editor, editor.text),
+            adaptive_selection_delay(files, files.text),
+        )
+        self.assertLessEqual(adaptive_selection_delay(files, "x", recent_changes=99), 250)
+
+    def test_crash_sentinel_records_only_process_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "running.json"
+            sentinel = CrashSentinel(path)
+            self.assertFalse(sentinel.start("0.5").unclean)
+            payload = json.loads(path.read_text())
+            self.assertEqual(set(payload), {"pid", "started_at", "version"})
+            self.assertTrue(sentinel.start("0.5").unclean)
+            sentinel.clean()
+            self.assertFalse(path.exists())
     def test_automation_is_declarative_and_transactional(self):
         context = SelectionContext("hola\nmundo", application="Firefox", editable=True)
         flow = {
@@ -90,6 +149,7 @@ class AutomationAndStateTest(unittest.TestCase):
         self.assertFalse(automation_matches({"conditions": {"text_types": ["url"]}}, context, {"text"}))
         self.assertFalse(automation_matches({"conditions": {"regex": "["}}, context, {"text"}))
         self.assertFalse(automation_matches({"conditions": {"regex": "x" * 257}}, context, {"text"}))
+        self.assertFalse(automation_matches({"conditions": {"regex": "(a+)+$"}}, context, {"text"}))
 
     def test_automation_operations_are_bounded(self):
         preview = preview_automation({"steps": [

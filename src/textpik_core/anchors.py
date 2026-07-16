@@ -6,8 +6,27 @@ import json
 import shutil
 import subprocess
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from .models import AnchorSource, PopupAnchor
+
+
+SOURCE_WEIGHT = {
+    AnchorSource.ATSPI_SELECTION: 0.08,
+    AnchorSource.KWIN: 0.07,
+    AnchorSource.HYPRLAND: 0.06,
+    AnchorSource.SWAY: 0.06,
+    AnchorSource.X11_POINTER: 0.05,
+    AnchorSource.QT_POINTER: 0.0,
+    AnchorSource.SCREEN_FALLBACK: -0.1,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class AnchorDecision:
+    anchor: PopupAnchor | None
+    considered: int
+    reason: str
 
 
 def place_popup(
@@ -17,6 +36,7 @@ def place_popup(
     avoid_rect=None,
     gap=6,
     pointer_direction=None,
+    preference="auto",
 ):
     """Place a popup using a small deterministic candidate score.
 
@@ -51,6 +71,9 @@ def place_popup(
             preferred = 3 if dx > 0 else 2
         else:
             preferred = 0 if dy > 0 else 1
+        candidates.insert(0, candidates.pop(preferred))
+    if avoid_rect and preference in {"above", "below", "side"}:
+        preferred = {"above": 0, "below": 1, "side": 2}[preference]
         candidates.insert(0, candidates.pop(preferred))
 
     def clamp(value, low, high):
@@ -115,10 +138,33 @@ class AnchorResolver:
     """Selects the freshest, most trustworthy anchor without desktop coupling."""
 
     def resolve(self, candidates: Iterable[PopupAnchor | None]) -> PopupAnchor | None:
+        return self.resolve_with_reason(candidates).anchor
+
+    def resolve_with_reason(self, candidates: Iterable[PopupAnchor | None]) -> AnchorDecision:
         usable = [candidate for candidate in candidates if candidate and candidate.fresh]
         if not usable:
-            return None
-        return max(usable, key=lambda item: (item.confidence, item.created_at))
+            return AnchorDecision(None, 0, "no-fresh-anchor")
+        winner = max(
+            usable,
+            key=lambda item: (
+                min(1.0, item.confidence + SOURCE_WEIGHT.get(item.source, 0.0)),
+                item.created_at,
+            ),
+        )
+        return AnchorDecision(winner, len(usable), winner.source.value)
+
+
+def scale_anchor(anchor: PopupAnchor, scale: float) -> PopupAnchor:
+    """Normalize logical compositor coordinates to Qt device coordinates."""
+    try:
+        scale = float(scale)
+    except (TypeError, ValueError):
+        scale = 1.0
+    scale = min(4.0, max(0.5, scale))
+    return PopupAnchor(
+        round(anchor.x * scale), round(anchor.y * scale), anchor.source,
+        anchor.confidence, anchor.created_at, anchor.ttl,
+    )
 
 
 def _run_json(argv: list[str], timeout: float = 0.35):

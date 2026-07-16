@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QTabWidget
 
 from src.textpik import (
     ActionPalette,
+    AutomationEditDialog,
     APP_VERSION,
     BaseSelectionMonitor,
     DEFAULT_ACTIONS,
@@ -370,6 +371,21 @@ class SettingsAboutTest(unittest.TestCase):
         self.assertEqual(dialog.context_profiles_list.count(), 1)
         collected, _actions = dialog.collect_settings()
         self.assertEqual(collected["context_profiles"], settings["context_profiles"])
+        dialog.close()
+
+    def test_visual_automation_editor_builds_declarative_flow(self):
+        dialog = AutomationEditDialog()
+        dialog.name_edit.setText("Limpiar error")
+        dialog.application_edit.setText("terminal")
+        dialog.types_edit.setText("error, code")
+        dialog.operation_combo.setCurrentText("replace")
+        dialog.source_edit.setText("ERROR:")
+        dialog.value_edit.setText("")
+        dialog._add_step()
+        flow = dialog.get_flow()
+        self.assertEqual(flow["conditions"]["application"], "terminal")
+        self.assertEqual(flow["conditions"]["text_types"], ["error", "code"])
+        self.assertEqual(flow["steps"][0]["operation"], "replace")
         dialog.close()
 
 

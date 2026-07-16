@@ -46,6 +46,24 @@ loaded only after an explicit action.
   execution timeout.
 - CI gates for core classification/insight latency and process PSS.
 
+## Intelligent interaction delivery
+
+- Adaptive 30–250 ms stabilization based on accessible metadata, with extra
+  protection for file managers, terminals and unstable selections.
+- Collapsed accessibility ranges are rejected before action planning.
+- Anchor decisions include source reliability, freshness and a diagnostic
+  reason; fractional normalization is available to compositor adapters.
+- User-selectable placement and bounded two-row composition expose more actions
+  without creating an unbounded window.
+- Action manifests support modifier variants while retaining the original
+  permission and ranking identity.
+- A graphical automation editor covers application, type, editability, safe
+  regex conditions and all shell-free engine operations.
+- Local JSON, entity, color, slug, terminal cleanup, diff and speech actions add
+  useful depth without resident dependencies.
+- A content-free crash sentinel identifies unclean shutdowns, and CI exercises
+  500 popup lifecycles with bounded PSS and thread growth.
+
 ## Next delivery gates
 
 - Complete the physical KDE/GNOME X11/Wayland matrix and record results in
@@ -53,8 +71,8 @@ loaded only after an explicit action.
 - Complete the human accessibility and translation reviews.
 - Finish two crash-free RC cycles without unresolved P0/P1 defects.
 - Build/install the Flatpak and AppImage on clean target systems.
-- Add a graphical automation editor; the 0.5 engine currently uses the documented
-  declarative file format.
+- Add visual drag reordering of steps and reusable automation templates; the
+  graphical editor and declarative engine are delivered.
 - Add an XDG Screenshot portal adapter for desktops without Spectacle,
   GNOME Screenshot or grim/slurp.
 - Evaluate a signed community catalog only after the WASI v2 runtime has passed

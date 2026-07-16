@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Retardo adaptativo de selección y rechazo de rangos colapsados.
+- Diagnóstico de proveedores de anclaje, preferencia de posición y composición
+  opcional en dos filas.
+- Variantes de acciones con modificadores que conservan permisos e identidad.
+- Editor visual completo de automatizaciones y límites reforzados de regex y salida.
+- Acciones locales de JSON, entidades, colores, slugs, limpieza de terminal,
+  comparación con portapapeles y lectura en voz alta.
+- Marcador privado de cierres anómalos y gate CI de 500 ciclos del popup.
+
 ## v0.5.0-rc.1 — 2026-07-14
 
 ### Inteligencia local

@@ -8,14 +8,19 @@ from .profiles import normalize_profiles
 
 
 DEFAULT_SETTINGS = {
-    "ui_version": 3,
+    "ui_version": 4,
     "show_on_selection": True,
     "start_at_login": True,
     "popup_delay_ms": 0,
+    "adaptive_delay_enabled": True,
+    "adaptive_delay_min_ms": 55,
+    "adaptive_delay_max_ms": 180,
     "popup_auto_hide_ms": 5000,
     "max_selection_length": 5000,
     "max_popup_actions": 8,
     "show_all_popup_actions": False,
+    "popup_allow_two_rows": True,
+    "popup_position_preference": "auto",
     "confirm_terminal_execution": True,
     "context_aware": True,
     "local_recommendations": False,
@@ -104,7 +109,6 @@ def normalize_settings(
             normalized[key] = settings[key]
 
     if ui_version < 3:
-        normalized["ui_version"] = 3
         if normalized.get("popup_icon_size") == 18:
             normalized["popup_icon_size"] = 17
         if normalized.get("popup_border_radius") == 13:
@@ -115,8 +119,14 @@ def normalize_settings(
             normalized["popup_background_color"] = "#18181b"
         if normalized.get("popup_border_color") == "#45474c":
             normalized["popup_border_color"] = "#3f3f46"
+    if ui_version < 4:
+        normalized["ui_version"] = 4
 
     _normalize_int(normalized, "popup_delay_ms", minimum=0)
+    _normalize_int(normalized, "adaptive_delay_min_ms", minimum=30, maximum=200)
+    _normalize_int(normalized, "adaptive_delay_max_ms", minimum=60, maximum=250)
+    if normalized["adaptive_delay_max_ms"] < normalized["adaptive_delay_min_ms"]:
+        normalized["adaptive_delay_max_ms"] = normalized["adaptive_delay_min_ms"]
     _normalize_int(normalized, "popup_auto_hide_ms", minimum=0, maximum=30000)
     _normalize_int(normalized, "max_selection_length", minimum=1)
     _normalize_int(normalized, "max_popup_actions", minimum=3, maximum=40)
@@ -143,6 +153,8 @@ def normalize_settings(
         normalized["popup_wayland_fallback_horizontal"] = DEFAULT_SETTINGS[
             "popup_wayland_fallback_horizontal"
         ]
+    if normalized.get("popup_position_preference") not in ("auto", "above", "below", "side"):
+        normalized["popup_position_preference"] = "auto"
 
     for key in (
         "show_on_selection",
@@ -161,6 +173,8 @@ def normalize_settings(
         "sticky_popup",
         "show_numeric_badges",
         "show_all_popup_actions",
+        "popup_allow_two_rows",
+        "adaptive_delay_enabled",
         "enable_global_hotkey",
         "disable_in_sensitive_fields",
         "ignore_file_selections",
