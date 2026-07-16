@@ -19,6 +19,7 @@ class ContextSnapshot:
     selection_rect: tuple[int, int, int, int] | None = None
     text_types: frozenset[str] = frozenset()
     clipboard_has_text: bool = False
+    multiline: bool = False
 
     @classmethod
     def from_selection(
@@ -27,6 +28,7 @@ class ContextSnapshot:
         *,
         text_types: Iterable[str] = (),
         clipboard_has_text: bool = False,
+        multiline: bool = False,
     ) -> ContextSnapshot:
         return cls(
             application=context.application,
@@ -36,6 +38,7 @@ class ContextSnapshot:
             selection_rect=context.selection_rect,
             text_types=frozenset(text_types),
             clipboard_has_text=clipboard_has_text,
+            multiline=multiline,
         )
 
 
@@ -56,7 +59,13 @@ def plan_actions(
             continue
         if not action.get("enabled", True) or not available(action):
             continue
-        if action.get("cmd") == "paste" and not snapshot.clipboard_has_text:
+        if action.get("cmd") == "paste" and (
+            not snapshot.clipboard_has_text or not snapshot.editable
+        ):
+            continue
+        if action.get("requires_editable", False) and not snapshot.editable:
+            continue
+        if action.get("requires_multiline", False) and not snapshot.multiline:
             continue
         contexts = action.get("context", ())
         if (
@@ -68,3 +77,26 @@ def plan_actions(
             continue
         planned.append(action)
     return planned
+
+
+def order_actions_for_popup(
+    actions: Iterable[Mapping], snapshot: ContextSnapshot
+) -> list[Mapping]:
+    """Stably promote safe relevant actions while honoring explicit pins."""
+    specific_types = snapshot.text_types - {"text"}
+
+    def score(action):
+        contexts = set(action.get("context", ())) - {"text"}
+        placement = action.get("placement", "contextual")
+        try:
+            priority = max(-100, min(100, int(action.get("priority", 0))))
+        except (TypeError, ValueError):
+            priority = 0
+        return (
+            (10_000 if action.get("pinned", False) else 0)
+            + priority
+            + (35 if contexts & specific_types else 0)
+            + (-1_000 if placement == "palette" else 10 if placement == "bar" else 0)
+        )
+
+    return sorted(actions, key=score, reverse=True)

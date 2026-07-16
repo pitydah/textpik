@@ -13,6 +13,12 @@
 - Captura de región OCR mediante XDG Screenshot Portal cargado bajo demanda.
 - Plantillas reutilizables y orden visual exacto de pasos de automatización.
 - Flatpak actualizado a KDE/PySide 6.9 y autodiagnóstico de paquetes.
+- Barra contextual con prioridad para acciones básicas, respeto absoluto de
+  acciones fijadas y nivel secundario para integraciones invasivas.
+- Nuevas acciones locales: cortar, limpiar espacios, tipos oración/título,
+  comillas, listas, ordenar/eliminar duplicados, URL, Base64 y HTML.
+- Ocultación por alejamiento sostenido del cursor y umbrales de intención menos
+  propensos a mostrar el popup en selecciones accidentales.
 
 ## v0.5.0-rc.1 — 2026-07-14
 

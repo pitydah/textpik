@@ -30,6 +30,7 @@ if len(sys.argv) >= 2 and sys.argv[1] in {"--self-check", "--self-check-gui"}:
 try:
     from textpik_core.actions import (
         PermissionStore,
+        TRANSFORMS,
         fuzzy_score,
         migrate_action,
         stable_action_id,
@@ -55,7 +56,11 @@ try:
         is_kde_desktop,
         is_wayland_session,
     )
-    from textpik_core.planning import ContextSnapshot, plan_actions
+    from textpik_core.planning import (
+        ContextSnapshot,
+        order_actions_for_popup,
+        plan_actions,
+    )
     from textpik_core.profiles import resolve_profile
     from textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
     from textpik_core.interaction import (
@@ -98,6 +103,7 @@ try:
 except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.actions import (
         PermissionStore,
+        TRANSFORMS,
         fuzzy_score,
         migrate_action,
         stable_action_id,
@@ -125,7 +131,11 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
         is_kde_desktop,
         is_wayland_session,
     )
-    from .textpik_core.planning import ContextSnapshot, plan_actions
+    from .textpik_core.planning import (
+        ContextSnapshot,
+        order_actions_for_popup,
+        plan_actions,
+    )
     from .textpik_core.profiles import resolve_profile
     from .textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
     from .textpik_core.interaction import (
@@ -345,8 +355,76 @@ HISTORY_FILE = CONFIG_DIR / "history.json"
 AUTOMATIONS_FILE = CONFIG_DIR / "automations.json"
 
 DEFAULT_ACTIONS = [
-    {"name": "Copiar", "icon": "copy.svg", "cmd": "copy", "enabled": True},
+    {
+        "name": "Copiar", "icon": "copy.svg", "cmd": "copy", "enabled": True,
+        "placement": "bar", "priority": 100,
+    },
+    {
+        "name": "Cortar", "icon": "cut.svg", "cmd": "cut", "enabled": True,
+        "requires_editable": True, "placement": "bar", "priority": 98,
+    },
     {"name": "Pegar", "icon": "paste.svg", "cmd": "paste", "enabled": True},
+    {
+        "name": "Recortar espacios", "icon": "trim.svg", "cmd": "trim",
+        "enabled": True, "context": ["text"], "priority": 86,
+        "variants": {"alt": "copy-transform:trim"},
+    },
+    {
+        "name": "Normalizar espacios", "icon": "normalize-spaces.svg",
+        "cmd": "normalize-spaces", "enabled": True, "context": ["text"],
+        "priority": 84, "variants": {"alt": "copy-transform:normalize-spaces"},
+    },
+    {
+        "name": "Tipo oración", "icon": "sentence-case.svg", "cmd": "capitalize",
+        "enabled": True, "context": ["text"], "priority": 80,
+        "variants": {"alt": "copy-transform:capitalize"},
+    },
+    {
+        "name": "Tipo título", "icon": "title-case.svg", "cmd": "title-case",
+        "enabled": True, "context": ["text"], "priority": 78,
+        "variants": {"alt": "copy-transform:title-case"},
+    },
+    {
+        "name": "Entre comillas", "icon": "quote-text.svg", "cmd": "quote-text",
+        "enabled": True, "context": ["text"], "priority": 76,
+        "variants": {"alt": "copy-transform:quote-text"},
+    },
+    {
+        "name": "Crear lista", "icon": "bullet-list.svg", "cmd": "bullet-list",
+        "enabled": True, "context": ["text"], "requires_multiline": True,
+        "priority": 74, "variants": {"alt": "copy-transform:bullet-list"},
+    },
+    {
+        "name": "Ordenar líneas", "icon": "sort-lines.svg", "cmd": "sort-lines",
+        "enabled": True, "context": ["text"], "requires_multiline": True,
+        "priority": 72, "variants": {"alt": "copy-transform:sort-lines"},
+    },
+    {
+        "name": "Eliminar líneas duplicadas", "icon": "unique-lines.svg",
+        "cmd": "unique-lines", "enabled": True, "context": ["text"],
+        "requires_multiline": True, "priority": 70,
+        "variants": {"alt": "copy-transform:unique-lines"},
+    },
+    {
+        "name": "Codificar URL", "icon": "url-code.svg", "cmd": "url-encode",
+        "enabled": True, "context": ["url", "text"], "placement": "palette",
+        "variants": {"alt": "copy-transform:url-encode"},
+    },
+    {
+        "name": "Decodificar URL", "icon": "url-decode.svg", "cmd": "url-decode",
+        "enabled": True, "context": ["url", "text"], "placement": "palette",
+        "variants": {"alt": "copy-transform:url-decode"},
+    },
+    {
+        "name": "Base64", "icon": "base64.svg", "cmd": "base64-encode",
+        "enabled": True, "context": ["text", "code"], "placement": "palette",
+        "variants": {"alt": "base64-decode"},
+    },
+    {
+        "name": "Escapar HTML", "icon": "html-code.svg", "cmd": "html-escape",
+        "enabled": True, "context": ["text", "code"], "placement": "palette",
+        "variants": {"alt": "html-unescape"},
+    },
     {
         "name": "Abrir link en una pestaña nueva",
         "icon": "open-link.svg",
@@ -502,13 +580,6 @@ DEFAULT_ACTIONS = [
         "cmd": "lowercase",
         "enabled": True,
         "variants": {"alt": "copy-transform:lowercase"},
-    },
-    {
-        "name": "Capitalizar",
-        "icon": "capitalize.svg",
-        "cmd": "capitalize",
-        "enabled": True,
-        "variants": {"alt": "copy-transform:capitalize"},
     },
     {
         "name": "Quitar saltos",
@@ -2318,12 +2389,20 @@ def run_cli_action(args):
             command = action["cmd"]
             break
 
-    if command in {"copy", "paste", "terminal", "print", "ollama"}:
+    if command in {"copy", "cut", "paste", "terminal", "print", "ollama"}:
         print(
             f"La accion '{command}' requiere la interfaz grafica de textpik.",
             file=sys.stderr,
         )
         return 2
+
+    if command in TRANSFORMS:
+        try:
+            print(transform_text(command, text))
+            return 0
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
 
     if command == "open-url":
         url = normalize_url(text)
@@ -2868,6 +2947,11 @@ class SettingsDialog(QDialog):
         )
         self.cursor_gap.setSuffix(" px")
         beh_form.addRow("Distancia a la selección", self.cursor_gap)
+        self.dismiss_distance = self._spin(
+            120, 800, int(self.settings.get("popup_dismiss_distance", 260))
+        )
+        self.dismiss_distance.setSuffix(" px")
+        beh_form.addRow("Ocultar al alejar el cursor", self.dismiss_distance)
         self.position_preference = QComboBox(self)
         for label, value in (
             ("Automática", "auto"),
@@ -2898,6 +2982,13 @@ class SettingsDialog(QDialog):
             bool(self.settings.get("local_recommendations", False))
         )
         beh_form.addRow("Recomendaciones locales", self.local_recommendations)
+        self.smart_action_order = QCheckBox(
+            "Priorizar acciones básicas y relevantes sin alterar las fijadas", self
+        )
+        self.smart_action_order.setChecked(
+            bool(self.settings.get("smart_action_order", True))
+        )
+        beh_form.addRow("Orden inteligente", self.smart_action_order)
         self.history_enabled = QCheckBox(
             "Guardar historial local limitado (desactivado por defecto)", self
         )
@@ -3747,6 +3838,7 @@ class SettingsDialog(QDialog):
         self.settings["adaptive_delay_enabled"] = self.adaptive_delay.isChecked()
         self.settings["popup_auto_hide_ms"] = self.auto_hide.value()
         self.settings["popup_cursor_gap"] = self.cursor_gap.value()
+        self.settings["popup_dismiss_distance"] = self.dismiss_distance.value()
         self.settings["popup_position_preference"] = (
             self.position_preference.currentData()
         )
@@ -3777,6 +3869,7 @@ class SettingsDialog(QDialog):
         self.settings["local_recommendations"] = (
             self.local_recommendations.isChecked()
         )
+        self.settings["smart_action_order"] = self.smart_action_order.isChecked()
         self.settings["history_enabled"] = self.history_enabled.isChecked()
         self.settings["history_max_items"] = self.history_max_items.value()
         self.settings["context_profiles_enabled"] = (
@@ -3932,6 +4025,18 @@ class TextPikApp(QObject):
             "clean-terminal",
             "compare-clipboard",
             "speak",
+            "cut",
+            "trim",
+            "normalize-spaces",
+            "title-case",
+            "quote-text",
+            "bullet-list",
+            "sort-lines",
+            "unique-lines",
+            "url-encode",
+            "url-decode",
+            "base64-encode",
+            "html-escape",
         }
         existing_commands = {action.get("cmd") for action in self.actions}
         added_core_action = False
@@ -4386,6 +4491,21 @@ class TextPikApp(QObject):
                 return
             logger.info("Click externo detectado; ocultando popup")
             self.hide_popup()
+            return
+
+        pointer_is_reliable = pointer_state is not None or not is_qt_wayland()
+        if outside and not buttons_pressed and pointer_is_reliable:
+            geometry = self.popup.geometry()
+            dx = max(geometry.left() - px, 0, px - geometry.right())
+            dy = max(geometry.top() - py, 0, py - geometry.bottom())
+            distance = (dx * dx + dy * dy) ** 0.5
+            if distance >= self.settings.get("popup_dismiss_distance", 260):
+                self._outside_count += 1
+                if self._outside_count >= 8:
+                    logger.info("Cursor alejado del popup; ocultando")
+                    self.hide_popup()
+                return
+        self._outside_count = 0
 
     def load_actions(self):
         return load_actions_file()
@@ -4780,7 +4900,7 @@ class TextPikApp(QObject):
                 logger.debug("No se pudo actualizar el historial privado", exc_info=True)
         self._last_intent_confidence = 1.0 if force else intent.confidence
         adaptive_popup = self.settings.get("adaptive_popup", True)
-        minimum_confidence = self.settings.get("popup_min_confidence", 45) / 100
+        minimum_confidence = self.settings.get("popup_min_confidence", 62) / 100
         if not force and adaptive_popup and intent.confidence < minimum_confidence:
             logger.info(
                 "Popup omitido por baja confianza: %.0f%% < %.0f%%",
@@ -4793,7 +4913,7 @@ class TextPikApp(QObject):
             not force
             and adaptive_popup
             and intent.confidence
-            < self.settings.get("popup_full_confidence", 78) / 100
+            < self.settings.get("popup_full_confidence", 84) / 100
         )
         if text:
             now = time.monotonic()
@@ -4829,6 +4949,7 @@ class TextPikApp(QObject):
                 self.selection_context,
                 text_types=text_types,
                 clipboard_has_text=clipboard_has_text(),
+                multiline="\n" in text or "\r" in text,
             )
             profile = None
             if self.settings.get("context_profiles_enabled", False):
@@ -4844,6 +4965,8 @@ class TextPikApp(QObject):
                 is_available=self._action_available,
                 allowed_action_ids=profile.action_ids if profile else None,
             )
+            if self.settings.get("smart_action_order", True):
+                visible = order_actions_for_popup(visible, snapshot)
             self.performance.observe("action-planning", planning_started)
             if not visible:
                 logger.info("Popup omitido: no hay acciones habilitadas")
@@ -4864,13 +4987,7 @@ class TextPikApp(QObject):
                     visible = [by_id[value] for value in suggested_ids]
                     visible.extend(
                         action
-                        for action in plan_actions(
-                            self.actions,
-                            snapshot,
-                            context_aware=context_aware,
-                            is_available=self._action_available,
-                            allowed_action_ids=profile.action_ids if profile else None,
-                        )
+                        for action in by_id.values()
                         if action.get("id", action.get("cmd", "")) not in suggested
                     )
             self.popup.set_context(self.selection_context)
@@ -4994,6 +5111,7 @@ class TextPikApp(QObject):
         if index is None:
             return
         action = self.actions.pop(index)
+        action["pinned"] = True
         self.actions.insert(0, action)
         self.save_actions()
         self.popup._actions_key = None
@@ -5046,6 +5164,16 @@ class TextPikApp(QObject):
             self._show_toast("Texto copiado")
             return
 
+        if cmd == "cut":
+            self.monitor.suppress_events()
+            self.copy_text_to_clipboard(text)
+            if self.atspi.replace_selection(self.selection_context, ""):
+                self.undo.remember(text, "", self.selection_context.application)
+                self._show_toast("Selección cortada")
+            else:
+                self._show_toast("Texto copiado; la aplicación no permite cortar")
+            return
+
         if cmd == "paste":
             self.paste_clipboard()
             return
@@ -5074,8 +5202,12 @@ class TextPikApp(QObject):
                 QMessageBox.warning(None, "Error", f"No se pudo abrir la URL:\n{exc}")
             return
 
-        if cmd in {"uppercase", "lowercase", "capitalize", "remove-breaks"}:
-            result = transform_text(cmd, text)
+        if cmd in TRANSFORMS:
+            try:
+                result = transform_text(cmd, text)
+            except ValueError as exc:
+                self.popup.show_inline_result("Transformación", str(exc))
+                return
             replaced = self.atspi.replace_selection(self.selection_context, result)
             if not replaced:
                 QApplication.clipboard().setText(result)

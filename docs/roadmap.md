@@ -67,6 +67,10 @@ loaded only after an explicit action.
   QtDBus, with race-free request handles and local-file validation.
 - The visual automation editor includes reusable safe templates and exact step
   ordering through drag-and-drop or explicit move buttons.
+- The popup planner filters edit-only and multiline operations, keeps pinned
+  actions authoritative, promotes local contextual basics and moves disruptive
+  integrations to the searchable palette. Thirteen new monochrome masters cover
+  cut, whitespace, case, list, URL, Base64 and HTML operations.
 
 ## Next delivery gates
 

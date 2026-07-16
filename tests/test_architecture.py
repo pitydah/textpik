@@ -39,7 +39,11 @@ from src.textpik_core.platform import (
     is_kde_desktop,
     is_wayland_session,
 )
-from src.textpik_core.planning import ContextSnapshot, plan_actions
+from src.textpik_core.planning import (
+    ContextSnapshot,
+    order_actions_for_popup,
+    plan_actions,
+)
 from src.textpik_core.profiles import normalize_profiles, resolve_profile
 from src.textpik_core.settings import (
     DEFAULT_SETTINGS as CORE_DEFAULT_SETTINGS,
@@ -62,6 +66,11 @@ class ActionContractTest(unittest.TestCase):
     def test_transform_behavior(self):
         self.assertEqual(transform_text("remove-breaks", "a\n  b"), "a b")
         self.assertEqual(transform_text("capitalize", "hola. mundo"), "Hola. Mundo")
+        self.assertEqual(transform_text("normalize-spaces", " a   b \n c "), "a b\nc")
+        self.assertEqual(transform_text("bullet-list", "uno\ndos"), "• uno\n• dos")
+        self.assertEqual(transform_text("unique-lines", "b\na\nb"), "b\na")
+        encoded = transform_text("base64-encode", "TextPik ✓")
+        self.assertEqual(transform_text("base64-decode", encoded), "TextPik ✓")
 
     def test_fuzzy_action_search(self):
         self.assertIsNotNone(fuzzy_score("trgoogle", "Traducir con Google"))
@@ -132,6 +141,30 @@ class ActionPlanningTest(unittest.TestCase):
             allowed_action_ids=frozenset({"count", "copy"}),
         )
         self.assertEqual([action["id"] for action in planned], ["copy", "count"])
+
+    def test_planner_filters_editable_and_multiline_actions(self):
+        actions = [
+            {"name": "Cut", "cmd": "cut", "requires_editable": True},
+            {"name": "List", "cmd": "bullet-list", "requires_multiline": True},
+        ]
+        self.assertEqual(plan_actions(actions, ContextSnapshot()), [])
+        snapshot = ContextSnapshot(editable=True, multiline=True)
+        self.assertEqual(len(plan_actions(actions, snapshot)), 2)
+
+    def test_smart_order_promotes_pins_context_and_demotes_palette(self):
+        actions = [
+            {"cmd": "ocr", "placement": "palette", "priority": 100},
+            {"cmd": "open", "context": ["url"], "priority": 20},
+            {"cmd": "copy", "priority": 40},
+            {"cmd": "custom", "pinned": True, "priority": -100},
+        ]
+        ordered = order_actions_for_popup(
+            actions, ContextSnapshot(text_types=frozenset({"text", "url"}))
+        )
+        self.assertEqual(
+            [action["cmd"] for action in ordered],
+            ["custom", "open", "copy", "ocr"],
+        )
 
 
 class ContextProfileTest(unittest.TestCase):
@@ -291,10 +324,12 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_background_color": "#123456",
             }
         )
-        self.assertEqual(migrated["ui_version"], 4)
+        self.assertEqual(migrated["ui_version"], 5)
         self.assertEqual(migrated["popup_icon_size"], 17)
         self.assertEqual(migrated["popup_spacing"], 2)
         self.assertEqual(migrated["popup_background_color"], "#123456")
+        self.assertEqual(migrated["popup_min_confidence"], 62)
+        self.assertEqual(migrated["popup_full_confidence"], 84)
 
     def test_settings_schema_drops_unknown_keys_and_bounds_values(self):
         normalized = normalize_core_settings(
@@ -318,6 +353,7 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_min_confidence": 200,
                 "popup_full_confidence": 1,
                 "popup_compact_actions": 99,
+                "popup_dismiss_distance": 9999,
             }
         )
         self.assertTrue(normalized["adaptive_popup"])
@@ -325,6 +361,7 @@ class SettingsContractTest(unittest.TestCase):
         self.assertEqual(normalized["popup_min_confidence"], 90)
         self.assertEqual(normalized["popup_full_confidence"], 50)
         self.assertEqual(normalized["popup_compact_actions"], 8)
+        self.assertEqual(normalized["popup_dismiss_distance"], 800)
 
     def test_color_validation_stays_an_injected_ui_boundary(self):
         calls = []

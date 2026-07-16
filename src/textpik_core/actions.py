@@ -2,16 +2,36 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import html
 import re
 import unicodedata
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from .models import ActionOperation, ActionResultType
 from .storage import read_json, write_json_atomic
 
-TRANSFORMS = {"uppercase", "lowercase", "capitalize", "remove-breaks"}
+TRANSFORMS = {
+    "uppercase", "lowercase", "capitalize", "remove-breaks", "trim",
+    "normalize-spaces", "title-case", "quote-text", "bullet-list",
+    "sort-lines", "unique-lines", "url-encode", "url-decode",
+    "base64-encode", "base64-decode", "html-escape", "html-unescape",
+}
 KNOWN_PERMISSIONS = {"clipboard", "network", "process", "filesystem", "accessibility"}
+DEFAULT_PRIORITIES = {
+    "copy": 100, "cut": 98, "paste": 96, "open-url": 92,
+    "trim": 86, "normalize-spaces": 84, "capitalize": 80,
+    "title-case": 78, "quote-text": 76, "bullet-list": 74,
+    "sort-lines": 72, "unique-lines": 70,
+}
+PALETTE_COMMANDS = {
+    "print", "terminal", "ollama", "textpik-history", "ocr-image",
+    "ocr-region", "klipper-menu", "speak",
+}
+BAR_COMMANDS = {"copy", "cut", "paste"}
 
 
 def fuzzy_score(query: str, candidate: str) -> int | None:
@@ -90,6 +110,21 @@ def migrate_action(raw: dict) -> dict | None:
         for key, value in variants.items()
     ):
         return None
+    if command in PALETTE_COMMANDS:
+        default_placement = "palette"
+    elif command in BAR_COMMANDS:
+        default_placement = "bar"
+    else:
+        default_placement = "contextual"
+    placement = str(raw.get("placement", default_placement))
+    if placement not in {"bar", "contextual", "palette"}:
+        placement = "contextual"
+    try:
+        priority = max(
+            -100, min(100, int(raw.get("priority", DEFAULT_PRIORITIES.get(command, 0))))
+        )
+    except (TypeError, ValueError):
+        priority = 0
     return {
         "id": raw.get("id") or stable_action_id(name, command),
         "name": name.strip(),
@@ -102,6 +137,11 @@ def migrate_action(raw: dict) -> dict | None:
         "permissions": permissions,
         "category": str(raw.get("category") or infer_category(name, command)),
         "variants": dict(variants),
+        "requires_editable": bool(raw.get("requires_editable", False)),
+        "requires_multiline": bool(raw.get("requires_multiline", False)),
+        "placement": placement,
+        "priority": priority,
+        "pinned": bool(raw.get("pinned", False)),
     }
 
 
@@ -121,6 +161,40 @@ def transform_text(command: str, text: str) -> str:
             if char in ".!?":
                 capitalize_next = True
         return "".join(output)
+    if command == "trim":
+        return text.strip()
+    if command == "normalize-spaces":
+        lines = [re.sub(r"[^\S\r\n]+", " ", line).strip() for line in text.splitlines()]
+        return "\n".join(lines).strip()
+    if command == "title-case":
+        return text.title()
+    if command == "quote-text":
+        value = text.strip()
+        return value if value.startswith("“") and value.endswith("”") else f"“{value}”"
+    if command == "bullet-list":
+        return "\n".join(
+            f"• {line.strip().lstrip('•-* ').strip()}"
+            for line in text.splitlines() if line.strip()
+        )
+    if command == "sort-lines":
+        return "\n".join(sorted(text.splitlines(), key=str.casefold))
+    if command == "unique-lines":
+        return "\n".join(dict.fromkeys(text.splitlines()))
+    if command == "url-encode":
+        return quote(text, safe="")
+    if command == "url-decode":
+        return unquote(text)
+    if command == "base64-encode":
+        return base64.b64encode(text.encode("utf-8")).decode("ascii")
+    if command == "base64-decode":
+        try:
+            return base64.b64decode(text.strip(), validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise ValueError("El texto no es Base64 UTF-8 válido") from exc
+    if command == "html-escape":
+        return html.escape(text, quote=True)
+    if command == "html-unescape":
+        return html.unescape(text)
     raise ValueError(f"Unknown transform: {command}")
 
 

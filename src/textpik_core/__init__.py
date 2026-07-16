@@ -25,7 +25,7 @@ from .platform import (
     is_kde_desktop,
     is_wayland_session,
 )
-from .planning import ContextSnapshot, plan_actions
+from .planning import ContextSnapshot, order_actions_for_popup, plan_actions
 from .profiles import ContextProfile, normalize_profiles, resolve_profile
 from .settings import DEFAULT_SETTINGS, normalize_bool, normalize_settings
 from .spelling import SpellingResult, SpellingService
@@ -131,6 +131,7 @@ __all__ = [
     "normalize_settings",
     "normalize_profiles",
     "plan_actions",
+    "order_actions_for_popup",
     "read_json",
     "resolve_profile",
     "TERMINAL_CANDIDATES",

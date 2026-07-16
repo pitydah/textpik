@@ -8,7 +8,7 @@ from .profiles import normalize_profiles
 
 
 DEFAULT_SETTINGS = {
-    "ui_version": 4,
+    "ui_version": 5,
     "show_on_selection": True,
     "start_at_login": True,
     "popup_delay_ms": 0,
@@ -17,13 +17,14 @@ DEFAULT_SETTINGS = {
     "adaptive_delay_max_ms": 180,
     "popup_auto_hide_ms": 5000,
     "max_selection_length": 5000,
-    "max_popup_actions": 8,
+    "max_popup_actions": 6,
     "show_all_popup_actions": False,
     "popup_allow_two_rows": True,
     "popup_position_preference": "auto",
     "confirm_terminal_execution": True,
     "context_aware": True,
     "local_recommendations": False,
+    "smart_action_order": True,
     "history_enabled": False,
     "history_max_items": 100,
     "history_max_age_days": 30,
@@ -33,8 +34,8 @@ DEFAULT_SETTINGS = {
     "context_profiles": [],
     "spelling_action_migrated": False,
     "adaptive_popup": True,
-    "popup_min_confidence": 45,
-    "popup_full_confidence": 78,
+    "popup_min_confidence": 62,
+    "popup_full_confidence": 84,
     "popup_compact_actions": 4,
     "sticky_popup": False,
     "show_numeric_badges": False,
@@ -50,6 +51,7 @@ DEFAULT_SETTINGS = {
     "popup_button_padding": 4,
     "popup_spacing": 2,
     "popup_cursor_gap": 6,
+    "popup_dismiss_distance": 260,
     "popup_border_radius": 12,
     "popup_opacity": 0.99,
     "popup_wayland_fallback_top": 96,
@@ -121,6 +123,14 @@ def normalize_settings(
             normalized["popup_border_color"] = "#3f3f46"
     if ui_version < 4:
         normalized["ui_version"] = 4
+    if ui_version < 5:
+        if normalized.get("max_popup_actions") == 8:
+            normalized["max_popup_actions"] = 6
+        if normalized.get("popup_min_confidence") == 45:
+            normalized["popup_min_confidence"] = 62
+        if normalized.get("popup_full_confidence") == 78:
+            normalized["popup_full_confidence"] = 84
+        normalized["ui_version"] = 5
 
     _normalize_int(normalized, "popup_delay_ms", minimum=0)
     _normalize_int(normalized, "adaptive_delay_min_ms", minimum=30, maximum=200)
@@ -139,6 +149,7 @@ def normalize_settings(
     _normalize_int(normalized, "popup_button_padding", minimum=2, maximum=12)
     _normalize_int(normalized, "popup_spacing", minimum=0, maximum=8)
     _normalize_int(normalized, "popup_cursor_gap", minimum=2, maximum=24)
+    _normalize_int(normalized, "popup_dismiss_distance", minimum=120, maximum=800)
     _normalize_int(normalized, "popup_border_radius", minimum=0, maximum=64)
     _normalize_int(normalized, "popup_wayland_fallback_top", minimum=0)
 
@@ -166,6 +177,7 @@ def normalize_settings(
         "blocked_activities_enabled",
         "context_aware",
         "local_recommendations",
+        "smart_action_order",
         "history_enabled",
         "context_profiles_enabled",
         "spelling_action_migrated",

@@ -14,10 +14,10 @@ copy, search, translate, open links, and more with one click.
 
 ## Features
 
-- 30+ built-in actions: copy/paste, search, translation, text transforms,
+- 45+ built-in actions: copy/cut/paste, search, translation, text transforms,
   on-demand spelling correction, terminal, print, Ollama, KDE Connect and Klipper
 - Context-aware filtering for URLs, email, code, numbers and regular text,
-  while preserving the user's fixed order
+  with optional smart ordering that always honors explicitly pinned actions
 - Optional context profiles choose an explicit action subset for an application
   and/or text type, with first-match priority and no automatic reordering
 - Expandable popup with a user-defined number of direct actions, optional
@@ -42,6 +42,9 @@ copy, search, translate, open links, and more with one click.
   terminal-output cleaning, clipboard comparison and on-demand text-to-speech
 - Confidence-aware composition: incomplete desktop context gets a smaller bar,
   while clearly non-text or very low-confidence selections are suppressed
+- Editability and multiline gates prevent cut, paste and list operations from
+  appearing where they cannot work; distant-pointer dismissal keeps the bar out
+  of the way when the user moves on
 - Constant-time candidate placement beside the pointer without covering the
   selected text, right-click suppression and optional inactivity auto-hide
 - Configurable icon size, bar padding, spacing, 3–40 direct actions and cursor gap
