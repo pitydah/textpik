@@ -19,6 +19,8 @@
   comillas, listas, ordenar/eliminar duplicados, URL, Base64 y HTML.
 - Ocultación por alejamiento sostenido del cursor y umbrales de intención menos
   propensos a mostrar el popup en selecciones accidentales.
+- Rediseño óptico a 17 px de los trece nuevos SVG: retícula y trazo unificados,
+  siluetas simplificadas y diferenciación precisa de URL/Base64 sin fondos.
 
 ## v0.5.0-rc.1 — 2026-07-14
 
