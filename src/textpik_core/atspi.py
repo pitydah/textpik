@@ -43,9 +43,15 @@ class AtspiSelectionBackend:
         except Exception:
             self._focus_listener = None
 
-    def _on_focus_event(self, event):
+    def _on_focus_event(self, event, *_user_data):
         if getattr(event, "detail1", False):
             self._focused_node = getattr(event, "source", None)
+
+    def context_menu_active(self) -> bool:
+        """Use the cached focus event; never traverse the desktop hot path."""
+        if self._focused_node is None:
+            return False
+        return "menu" in self._role_name(self._focused_node).casefold()
 
     def subscribe_selection_changes(self, callback) -> bool:
         """Prefer accessibility events; callers may keep polling as fallback."""
@@ -63,7 +69,7 @@ class AtspiSelectionBackend:
             self._selection_callback = None
             return False
 
-    def _on_selection_event(self, event):
+    def _on_selection_event(self, event, *_user_data):
         callback = self._selection_callback
         if callback is not None:
             callback(getattr(event, "source", None))

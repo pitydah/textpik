@@ -6,7 +6,7 @@ import ipaddress
 import json
 import re
 import shlex
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 
 def build_command_argv(template: str, text: str) -> list[str]:
@@ -72,8 +72,21 @@ def classify_text(text: str) -> frozenset[str]:
         return frozenset()
 
     types = {"text"}
+    if stripped.casefold().startswith("magnet:?"):
+        query = urlparse(stripped).query
+        values = parse_qs(query)
+        if any(
+            item.casefold().startswith(("urn:btih:", "urn:btmh:"))
+            for item in values.get("xt", [])
+        ):
+            types.add("magnet")
+    if re.fullmatch(r"[^\W\d_]+(?:[-'’][^\W\d_]+)?", stripped, re.UNICODE):
+        types.add("word")
     if normalize_url(stripped):
         types.add("url")
+    parsed_stream = urlparse(stripped)
+    if parsed_stream.scheme.casefold() in {"rtsp", "rtmp", "mms"} and parsed_stream.hostname:
+        types.add("stream-url")
     if re.fullmatch(r"[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}", stripped):
         types.add("email")
     if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", stripped):

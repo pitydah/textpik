@@ -35,5 +35,17 @@ class UndoManager:
             return record
         return None
 
+    def can_undo(self, application: str = "") -> bool:
+        now = monotonic()
+        return any(
+            now - record.created_at <= self.ttl
+            and not (
+                application
+                and record.application
+                and application != record.application
+            )
+            for record in reversed(self._records)
+        )
+
     def clear(self) -> None:
         self._records.clear()

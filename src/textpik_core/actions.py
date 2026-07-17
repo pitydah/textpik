@@ -33,6 +33,71 @@ PALETTE_COMMANDS = {
 }
 BAR_COMMANDS = {"copy", "cut", "paste"}
 
+BUILTIN_ICON_UPGRADES = {
+    "count": ("counter.svg", "count-words.svg"),
+    "insight": ("counter.svg", "calculator.svg"),
+    "grammar": ("spellcheck.svg", "grammar.svg"),
+    "undo": ("paste.svg", "undo.svg"),
+    "textpik-history": ("klipper-history.svg", "history.svg"),
+    "ocr-image": ("dictionary.svg", "ocr-image.svg"),
+    "ocr-region": ("dictionary.svg", "ocr-region.svg"),
+    "format-json": ("capitalize.svg", "json.svg"),
+    "extract-entities": ("counter.svg", "extract-entities.svg"),
+    "color-details": ("counter.svg", "color-picker.svg"),
+    "slugify": ("remove-breaks.svg", "slug.svg"),
+    "clean-terminal": ("terminal.svg", "terminal-clean.svg"),
+    "compare-clipboard": ("counter.svg", "compare.svg"),
+    "speak": ("dictionary.svg", "speak.svg"),
+}
+
+BUILTIN_CONTEXT_UPGRADES = {
+    "insight": (("number", "currency", "text"), ("number", "currency")),
+    "terminal": (
+        ("text", "code", "ip", "number"),
+        ("code", "ip", "number", "path", "error"),
+    ),
+    "clean-terminal": (("error", "code", "text"), ("error", "code")),
+    "xdg-open 'https://www.google.com/maps?q={url}'": (
+        ("text",),
+        ("text", "coordinates"),
+    ),
+    "xdg-open 'https://dle.rae.es/{url}'": ((), ("word",)),
+    "open-media-player": (("url",), ("url", "stream-url")),
+}
+
+BUILTIN_NAME_UPGRADES = {
+    "uppercase": (("MAYUSCULAS", "MAYÚSCULAS", "Mayúsculas"), "Convertir a mayúsculas"),
+    "lowercase": (("minusculas", "MINÚSCULAS", "Minúsculas"), "Convertir a minúsculas"),
+    "capitalize": (("Tipo oración", "Capitalizar"), "Capitalizar oraciones"),
+    "remove-breaks": (("Quitar saltos",), "Unir líneas limpiamente"),
+    "quote-text": (("Entre comillas",), "Añadir comillas tipográficas"),
+    "bullet-list": (("Crear lista",), "Crear lista con viñetas"),
+    "count": (("Contar palabras",), "Contar texto"),
+}
+
+
+def upgrade_builtin_action_metadata(actions: list[dict]) -> bool:
+    """Upgrade only untouched legacy metadata, preserving user customization."""
+    changed = False
+    for action in actions:
+        command = action.get("cmd")
+        icon_upgrade = BUILTIN_ICON_UPGRADES.get(command)
+        if icon_upgrade and action.get("icon") == icon_upgrade[0]:
+            action["icon"] = icon_upgrade[1]
+            changed = True
+        context_upgrade = BUILTIN_CONTEXT_UPGRADES.get(command)
+        if context_upgrade and tuple(action.get("context", ())) == context_upgrade[0]:
+            action["context"] = list(context_upgrade[1])
+            changed = True
+        name_upgrade = BUILTIN_NAME_UPGRADES.get(command)
+        if name_upgrade and action.get("name") in name_upgrade[0]:
+            action["name"] = name_upgrade[1]
+            changed = True
+        if command == "compare-clipboard" and not action.get("requires_clipboard"):
+            action["requires_clipboard"] = True
+            changed = True
+    return changed
+
 
 def fuzzy_score(query: str, candidate: str) -> int | None:
     """Rank compact action queries while tolerating missing characters."""
@@ -60,15 +125,28 @@ def fuzzy_score(query: str, candidate: str) -> int | None:
 
 def infer_category(name: str, command: str) -> str:
     lowered = f"{name} {command}".casefold()
-    if command in {"copy", "paste", "klipper-save", "klipper-menu"}:
+    if command in {"copy", "cut", "paste", "klipper-save", "klipper-menu"}:
         return "Portapapeles"
-    if command in TRANSFORMS or command in {"count", "spellcheck"} or "diccionario" in lowered:
+    if command in TRANSFORMS or command in {
+        "count", "spellcheck", "grammar", "format-json", "extract-entities",
+        "slugify", "compare-clipboard",
+    } or "diccionario" in lowered:
         return "Texto"
-    if command in {"terminal", "print"}:
+    if command in {"terminal", "print", "ocr-image", "ocr-region", "speak"}:
         return "Sistema"
+    if command in {"insight", "color-details"}:
+        return "Utilidades"
+    if command in {"undo", "textpik-history"}:
+        return "Portapapeles"
     if command == "kdeconnect":
         return "Compartir"
-    if command == "ollama" or any(name in lowered for name in ("chatgpt", "deepseek")):
+    if command in {"open-magnet", "send-magnet"}:
+        return "Descargas"
+    if command == "open-media-player":
+        return "Multimedia"
+    if command == "ollama" or any(
+        name in lowered for name in ("chatgpt", "deepseek", "claude", "gemini")
+    ):
         return "IA"
     if "http" in command or "buscar" in lowered or "search" in lowered:
         return "Buscar"
@@ -139,6 +217,7 @@ def migrate_action(raw: dict) -> dict | None:
         "variants": dict(variants),
         "requires_editable": bool(raw.get("requires_editable", False)),
         "requires_multiline": bool(raw.get("requires_multiline", False)),
+        "requires_clipboard": bool(raw.get("requires_clipboard", False)),
         "placement": placement,
         "priority": priority,
         "pinned": bool(raw.get("pinned", False)),
@@ -151,14 +230,32 @@ def transform_text(command: str, text: str) -> str:
     if command == "lowercase":
         return text.lower()
     if command == "remove-breaks":
-        return re.sub(r" +", " ", text.replace("\n", " ").replace("\r", " ")).strip()
+        value = text.replace("\r\n", "\n").replace("\r", "\n").replace("\u00ad", "")
+        joined = ""
+        for raw_line in value.split("\n"):
+            line = re.sub(r"[^\S\r\n]+", " ", raw_line).strip()
+            if not line:
+                continue
+            if (
+                joined.endswith("-")
+                and len(joined) >= 2
+                and joined[-2].isalpha()
+                and line[0].islower()
+            ):
+                joined = joined[:-1] + line
+            else:
+                joined = f"{joined} {line}".strip()
+        joined = re.sub(r"\s+([,.;:!?%\)\]\}»”])", r"\1", joined)
+        return re.sub(r"([¿¡\(\[\{«“])\s+", r"\1", joined).strip()
     if command == "capitalize":
         capitalize_next, output = True, []
-        for char in text:
+        for char in text.lower():
             if capitalize_next and char.isalpha():
                 char, capitalize_next = char.upper(), False
+            elif capitalize_next and char.isdigit():
+                capitalize_next = False
             output.append(char)
-            if char in ".!?":
+            if char in ".!?…\n":
                 capitalize_next = True
         return "".join(output)
     if command == "trim":
@@ -170,12 +267,30 @@ def transform_text(command: str, text: str) -> str:
         return text.title()
     if command == "quote-text":
         value = text.strip()
-        return value if value.startswith("“") and value.endswith("”") else f"“{value}”"
+        if not value:
+            return ""
+        if value.startswith("“") and value.endswith("”"):
+            return value
+        for opening, closing in (("«", "»"), ('"', '"'), ("‘", "’"), ("'", "'")):
+            if len(value) >= 2 and value.startswith(opening) and value.endswith(closing):
+                value = value[len(opening) : -len(closing)].strip()
+                break
+        return f"“{value}”"
     if command == "bullet-list":
-        return "\n".join(
-            f"• {line.strip().lstrip('•-* ').strip()}"
-            for line in text.splitlines() if line.strip()
+        marker = re.compile(
+            r"^(?P<indent>[ \t]*)(?:(?:[•●◦▪‣*+\-–—])|(?:\d{1,4}[.)])|(?:[A-Za-z][.)]))[ \t]+"
         )
+        output = []
+        for raw_line in text.splitlines():
+            if not raw_line.strip():
+                continue
+            match = marker.match(raw_line)
+            indent = match.group("indent") if match else raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            content = raw_line[match.end() :] if match else raw_line.strip()
+            content = content.strip()
+            if content:
+                output.append(f"{indent}• {content}")
+        return "\n".join(output)
     if command == "sort-lines":
         return "\n".join(sorted(text.splitlines(), key=str.casefold))
     if command == "unique-lines":

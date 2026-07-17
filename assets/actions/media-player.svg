@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <title>Abrir enlace en el reproductor local</title>
+  <rect x="6.25" y="2.75" width="15.5" height="18.5" rx="3" stroke="#111111" stroke-width="1.85"/>
+  <path d="m11.2 8.1 5.4 3.9-5.4 3.9V8.1Z" fill="#111111"/>
+  <path d="M2.25 12h5.2m0 0L5.4 9.95M7.45 12 5.4 14.05" stroke="#111111" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

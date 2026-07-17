@@ -14,7 +14,12 @@ from src.textpik_core.automation import (
 )
 from src.textpik_core.grammar import LanguageToolService, apply_suggestions
 from src.textpik_core.history import HistoryStore
-from src.textpik_core.insights import convert_units, local_insight, safe_calculate
+from src.textpik_core.insights import (
+    convert_units,
+    local_insight,
+    safe_calculate,
+    text_statistics,
+)
 from src.textpik_core.models import SelectionContext
 from src.textpik_core.ranking import LocalActionRanker
 from src.textpik_core.performance import read_process_resources
@@ -47,6 +52,15 @@ from src.textpik_core.portal import (
 
 
 class InsightTest(unittest.TestCase):
+    def test_text_statistics_counts_unicode_words_and_richer_structure(self):
+        insight = text_statistics("Hola, alta-calidad.\n\nL'amour cuesta 3,50 €.")
+        self.assertEqual(insight.title, "Estadísticas del texto")
+        self.assertIn("5 palabras", insight.value)
+        self.assertIn("2 oraciones", insight.detail)
+        self.assertIn("2 párrafos", insight.detail)
+        self.assertIn("3 líneas", insight.detail)
+        self.assertIn("menos de 1 min", insight.detail)
+
     def test_safe_calculator_rejects_code_and_bounds_exponents(self):
         self.assertEqual(safe_calculate("2 + 3 * 4"), 14)
         with self.assertRaises(ValueError):
@@ -150,6 +164,16 @@ class AutomationAndStateTest(unittest.TestCase):
         self.assertEqual(resolve_action_command(action, "alt"), "minify-json")
         self.assertEqual(resolve_action_command(action, "shift"), "format-json")
 
+        contextual = plan_popup_composition(
+            5,
+            requested=8,
+            row_capacity=12,
+            catalog_count=17,
+        )
+        self.assertEqual(contextual.direct_count, 5)
+        self.assertEqual(contextual.overflow_count, 12)
+        self.assertEqual((contextual.rows, contextual.columns), (1, 6))
+
     def test_adaptive_delay_is_bounded_and_respects_context(self):
         editor = SelectionContext("hola", application="Editor", role="text", editable=True)
         files = SelectionContext("hola", application="Dolphin", role="text")
@@ -158,6 +182,10 @@ class AutomationAndStateTest(unittest.TestCase):
             adaptive_selection_delay(files, files.text),
         )
         self.assertLessEqual(adaptive_selection_delay(files, "x", recent_changes=99), 250)
+        self.assertGreater(
+            adaptive_selection_delay(editor, "palabra"),
+            adaptive_selection_delay(editor, "dos palabras"),
+        )
 
     def test_crash_sentinel_records_only_process_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -285,11 +313,11 @@ class AutomationAndStateTest(unittest.TestCase):
         cancelled = Event()
         cancelled.set()
         with self.assertRaises(RuntimeError):
-            OllamaProvider().generate("texto", cancelled=cancelled)
+            OllamaProvider().generate("texto", model="llama3.2", cancelled=cancelled)
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b"x" * 2_000_001
         with patch("urllib.request.urlopen", return_value=response), self.assertRaises(RuntimeError):
-            OllamaProvider().generate("texto")
+            OllamaProvider().generate("texto", model="llama3.2")
 
     def test_tesseract_provider_success_failure_and_validation(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -299,7 +327,7 @@ class AutomationAndStateTest(unittest.TestCase):
             with patch("subprocess.run", return_value=completed) as run:
                 result = TesseractProvider(timeout=1).recognize(image)
             self.assertEqual(result.text, "texto reconocido")
-            self.assertEqual(run.call_args.args[0][-2:], ["-l", "eng+spa"])
+            self.assertEqual(run.call_args.args[0][-2:], ["-l", "eng"])
             with self.assertRaises(ValueError):
                 TesseractProvider().recognize(image, "--bad language")
             failed = subprocess.CompletedProcess([], 1, "", "modelo ausente")

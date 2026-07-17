@@ -25,7 +25,7 @@ class OllamaProvider:
         self.endpoint = endpoint
         self.timeout = max(1.0, min(120.0, timeout))
 
-    def generate(self, text: str, *, task: str = "rewrite", model: str = "llama3", cancelled: Event | None = None) -> ProviderResponse:
+    def generate(self, text: str, *, task: str = "rewrite", model: str, cancelled: Event | None = None) -> ProviderResponse:
         if cancelled and cancelled.is_set():
             raise RuntimeError("cancelled")
         instructions = {
@@ -69,7 +69,7 @@ class TesseractProvider:
         self.executable = executable
         self.timeout = max(2.0, min(60.0, timeout))
 
-    def recognize(self, image: Path, languages: str = "eng+spa") -> ProviderResponse:
+    def recognize(self, image: Path, languages: str = "eng") -> ProviderResponse:
         image = image.expanduser().resolve()
         if not image.is_file() or image.stat().st_size > 50 * 1024 * 1024:
             raise ValueError("invalid OCR image")

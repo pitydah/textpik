@@ -23,6 +23,52 @@ def default_actions():
 
 
 class ActionAssetsTest(unittest.TestCase):
+    def test_ai_actions_use_dedicated_brand_masters_without_backgrounds(self):
+        expected = {
+            "Preguntar a Claude": "claude.svg",
+            "Preguntar a Gemini": "gemini.svg",
+        }
+        icons = {
+            action["name"]: action["icon"]
+            for action in default_actions()
+            if action["name"] in expected
+        }
+        self.assertEqual(icons, expected)
+        for icon in expected.values():
+            source = (ACTIONS_DIR / icon).read_text(encoding="utf-8").lower()
+            with self.subTest(icon=icon):
+                self.assertNotIn("<rect", source)
+                self.assertNotIn("gradient", source)
+                self.assertNotIn("filter", source)
+
+    def test_semantic_actions_use_distinct_pictograms(self):
+        expected = {
+            "count": "count-words.svg",
+            "insight": "calculator.svg",
+            "grammar": "grammar.svg",
+            "undo": "undo.svg",
+            "textpik-history": "history.svg",
+            "ocr-image": "ocr-image.svg",
+            "ocr-region": "ocr-region.svg",
+            "format-json": "json.svg",
+            "extract-entities": "extract-entities.svg",
+            "color-details": "color-picker.svg",
+            "slugify": "slug.svg",
+            "clean-terminal": "terminal-clean.svg",
+            "compare-clipboard": "compare.svg",
+            "speak": "speak.svg",
+            "open-magnet": "magnet.svg",
+            "send-magnet": "torrent-server.svg",
+            "open-media-player": "media-player.svg",
+        }
+        icons = {
+            action["cmd"]: action["icon"]
+            for action in default_actions()
+            if action["cmd"] in expected
+        }
+        self.assertEqual(icons, expected)
+        self.assertEqual(len(set(icons.values())), len(expected))
+
     def test_every_default_action_has_a_master_svg(self):
         missing = [
             action["icon"]

@@ -10,6 +10,7 @@ FILE_MANAGERS = ("dolphin", "nautilus", "nemo", "thunar", "pcmanfm", "caja")
 TEXT_ROLES = ("text", "entry", "paragraph", "document", "terminal")
 FILE_ROLES = ("icon", "list item", "tree item", "table cell")
 NON_TEXT_ROLES = (
+    "menu",
     "menu item",
     "push button",
     "check box",
@@ -48,6 +49,10 @@ def adaptive_selection_delay(
     length = len(str(text or ""))
     if length == 1:
         delay += 35
+    elif length <= 64 and not any(char.isspace() for char in str(text).strip()):
+        # Browsers commonly select the word below a secondary click before
+        # exposing their context menu. A short grace lets focus metadata settle.
+        delay += 55
     elif length > 2000:
         delay += 25
     return max(30, min(250, delay))

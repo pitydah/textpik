@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Acciones contextuales para abrir magnet con el cliente torrent predeterminado,
+  enviarlos a servidores Transmission/qBittorrent configurables y reproducir
+  URLs multimedia con la aplicación local predeterminada o un fallback conocido.
+- Ciclo determinista del popup: permanece ocho segundos sin interacción, un clic
+  externo confirmado lo cierra de inmediato incluso durante la inmunidad inicial,
+  y los vaciados transitorios de PRIMARY nunca adelantan su cierre. El posicionador
+  prueba los cuatro cuadrantes inmediatos del cursor con una separación menor.
+- Cerrar «Más acciones» mediante un clic exterior cierra también su barra
+  propietaria, en lugar de dejarla esperando el temporizador de ocho segundos.
+- Nuevas acciones «Preguntar a Claude» y «Preguntar a Gemini», con integración
+  no destructiva para perfiles existentes y SVG monocromáticos de marca sin fondo.
 - Retardo adaptativo de selección y rechazo de rangos colapsados.
 - Diagnóstico de proveedores de anclaje, preferencia de posición y composición
   opcional en dos filas.
@@ -21,6 +32,50 @@
   propensos a mostrar el popup en selecciones accidentales.
 - Rediseño óptico a 17 px de los trece nuevos SVG: retícula y trazo unificados,
   siluetas simplificadas y diferenciación precisa de URL/Base64 sin fondos.
+- Catorce pictogramas semánticos nuevos para cálculo, conteo, gramática, deshacer,
+  historial, OCR, JSON, extracción, color, slug, terminal, comparación y voz; migración
+  no destructiva de configuraciones existentes y filtrado contextual más preciso.
+- Corregido el cierre prematuro del popup al mezclar coordenadas Wayland y
+  XWayland durante el modo de posicionamiento alternativo.
+- El clic secundario tiene prioridad sobre Clipboard y AT-SPI: cancela lecturas
+  pendientes, oculta la barra incluso durante su inmunidad inicial y evita que
+  reaparezca sobre el menú contextual nativo.
+- Auditoría de acciones sin efecto: los monitores exigen un backend real y las
+  integraciones de Klipper validan errores D-Bus antes de informar éxito.
+- La barra muestra al menos ocho acciones directas más el acceso al excedente,
+  calcula ese botón dentro de la misma fila y ajusta su geometría al conjunto
+  activo; Configuración permite elegir de 8 a 40 o mostrar todas.
+- La composición adaptativa reutiliza los botones cuando produce el mismo
+  resultado visual, evitando reconstrucciones y asignaciones innecesarias.
+- Las palabras autoseleccionadas por clic secundario reciben estabilización
+  adicional y se descartan si AT-SPI confirma que el menú nativo está activo.
+- El orden manual es ahora contractual: contexto y disponibilidad solo filtran;
+  nunca reordenan. Se retiraron las promociones automáticas por prioridad y uso.
+- El popup no activable deja de cerrarse por cambios de foco normales y mantiene
+  una geometría mínima estable durante recomposiciones nativas en Wayland.
+- Las integraciones opcionales se validan en segundo plano: modelo real de Ollama,
+  idiomas de Tesseract, diccionario Enchant, servidor LanguageTool y runtime WASI.
+- Ollama selecciona automáticamente un modelo local disponible y OCR degrada a
+  los idiomas instalados en vez de fallar por exigir siempre inglés y español.
+- Historial Klipper abre ahora el historial real; recargar acciones conserva las
+  automatizaciones y extensiones dinámicas, y se retiró la escritura de ranking
+  que ya no tenía efecto sobre el orden configurado.
+- El ciclo de interacción conserva una instantánea del texto aunque Wayland
+  vacíe PRIMARY al pulsar, coalesce fragmentos de un mismo arrastre y protege
+  pulsaciones de acciones frente a cierres por foco, KWin y temporizadores.
+- La ventana normal declara explícitamente que no acepta foco; el modo teclado
+  lo habilita solo para una invocación por atajo. KWin ignora activaciones de la
+  propia ventana y TextPik confirma los vaciados de selección antes de ocultar.
+- Las acciones básicas de texto reciben semántica Unicode y nombres más claros:
+  tipo oración real, unión de líneas con reparación de palabras cortadas,
+  comillas tipográficas idempotentes y listas que respetan sangría y negativos.
+- Contar texto distingue palabras compuestas y decimales y muestra caracteres
+  con/sin espacios, oraciones, párrafos, líneas y tiempo estimado de lectura.
+- Conteos, cálculos, conversiones, comparaciones, OCR y otros resultados
+  informativos se presentan en una tarjeta flotante independiente, desplazable
+  y copiable; la barra de acciones nunca se expande para mostrar información.
+- La tarjeta de resultados se crea de forma diferida solo al solicitarla, se
+  mantiene mientras el usuario interactúa y se cierra de forma independiente.
 
 ## v0.5.0-rc.1 — 2026-07-14
 

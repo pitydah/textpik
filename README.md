@@ -159,6 +159,18 @@ Klipper actions are shown only in KDE. KDE Connect remains available on other
 desktops when its D-Bus service or `kdeconnect-cli` is installed. Selection
 monitoring uses X11 PRIMARY or the standard Wayland `wl-clipboard` protocol.
 
+## Magnet y reproducción multimedia
+
+- **Abrir magnet en cliente torrent** usa la asociación estándar
+  `x-scheme-handler/magnet`, respetando el cliente predeterminado del escritorio.
+- **Enviar magnet a servidor** admite Transmission RPC y qBittorrent Web API.
+  Los servidores se administran en **Configuración → Integraciones**.
+- **Abrir en reproductor local** usa primero la aplicación predeterminada para
+  vídeo y degrada a MPV, VLC, Celluloid, Haruna o SMPlayer cuando es necesario.
+
+Las solicitudes de red se ejecutan fuera del hilo gráfico, tienen tiempo límite
+y solo se realizan al invocar explícitamente una acción.
+
 ## Packaging
 
 - `packaging/install.sh`: portable per-user installation for Arch, Debian,

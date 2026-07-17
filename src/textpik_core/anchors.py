@@ -51,11 +51,16 @@ def place_popup(
     if avoid_rect:
         rx, ry, rw, rh = avoid_rect
         candidates = [
+            # Cursor-local quadrants keep the toolbar close to the final drag
+            # edge. The overlap score rejects whichever side covers selection.
+            (ax + gap, ay + gap),
+            (ax + gap, ay - height - gap),
+            (ax - width - gap, ay + gap),
+            (ax - width - gap, ay - height - gap),
             (ax - width // 2, ry - height - gap),
             (ax - width // 2, ry + rh + gap),
             (rx + rw + gap, ay - height // 2),
             (rx - width - gap, ay - height // 2),
-            (ax + gap, ay + gap),
         ]
     else:
         candidates = [
@@ -65,16 +70,22 @@ def place_popup(
             (ax - width - gap, ay - height - gap),
         ]
 
-    if pointer_direction and len(candidates) >= 4:
+    if (
+        pointer_direction
+        and len(candidates) >= 4
+        and (not avoid_rect or preference == "auto")
+    ):
         dx, dy = pointer_direction
         if abs(dx) > abs(dy):
             preferred = 3 if dx > 0 else 2
         else:
             preferred = 0 if dy > 0 else 1
         candidates.insert(0, candidates.pop(preferred))
+    explicit_preferred = None
     if avoid_rect and preference in {"above", "below", "side"}:
-        preferred = {"above": 0, "below": 1, "side": 2}[preference]
+        preferred = {"above": 4, "below": 5, "side": 6}[preference]
         candidates.insert(0, candidates.pop(preferred))
+        explicit_preferred = candidates[0]
 
     def clamp(value, low, high):
         return min(max(value, low), max(low, high))
@@ -92,12 +103,20 @@ def place_popup(
         x = clamp(raw_x, sx, right - width)
         y = clamp(raw_y, sy, bottom - height)
         displacement = abs(x - raw_x) + abs(y - raw_y)
-        distance = abs((x + width // 2) - ax) + abs((y + height // 2) - ay)
+        # Measure the pointer-to-edge distance, not pointer-to-center. A wide
+        # toolbar can be easy to reach even when its visual center is far away.
+        cursor_dx = max(x - ax, 0, ax - (x + width))
+        cursor_dy = max(y - ay, 0, ay - (y + height))
+        distance = cursor_dx + cursor_dy
         covers_anchor = x <= ax <= x + width and y <= ay <= y + height
         score = (
             overlap_area(x, y) * 10_000
             + int(covers_anchor) * 1_000_000
             + displacement * 80
+            + int(
+                explicit_preferred is not None
+                and (raw_x, raw_y) != explicit_preferred
+            ) * 500
             + distance
             + order
         )

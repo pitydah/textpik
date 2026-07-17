@@ -257,10 +257,27 @@ install_kwin_bridge() {
     cp -a "$KWIN_SCRIPT_SOURCE/." "$KWIN_SCRIPT_DEST/"
     ok "KWin bridge copiado"
 
-    if command -v qdbus &>/dev/null; then
-        if qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \
-            "textpik-cursor-bridge" 2>/dev/null && \
-           qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.start 2>/dev/null; then
+    local qdbus_command=""
+    if command -v qdbus6 &>/dev/null; then
+        qdbus_command="qdbus6"
+    elif command -v qdbus &>/dev/null; then
+        qdbus_command="qdbus"
+    fi
+    if [[ -n "$qdbus_command" ]]; then
+        command -v kwriteconfig6 &>/dev/null && \
+            kwriteconfig6 --file kwinrc --group Plugins \
+                --key textpik-cursor-bridgeEnabled true
+        "$qdbus_command" org.kde.KWin /Scripting \
+            org.kde.kwin.Scripting.unloadScript \
+            "textpik-cursor-bridge" 2>/dev/null || true
+        local script_id
+        script_id=$("$qdbus_command" org.kde.KWin /Scripting \
+            org.kde.kwin.Scripting.loadScript \
+            "$KWIN_SCRIPT_DEST/contents/code/main.js" \
+            "textpik-cursor-bridge" 2>/dev/null || true)
+        if [[ "$script_id" =~ ^[0-9]+$ ]] && \
+           "$qdbus_command" org.kde.KWin "/Scripting/Script${script_id}" \
+            org.kde.kwin.Script.run 2>/dev/null; then
             ok "KWin bridge activado"
         else
             info "No se pudo activar automaticamente."

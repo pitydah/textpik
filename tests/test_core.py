@@ -2,14 +2,15 @@ import inspect
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtCore import QEventLoop, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QTabWidget
 
 from src.textpik import (
@@ -19,9 +20,11 @@ from src.textpik import (
     BaseSelectionMonitor,
     DEFAULT_ACTIONS,
     DEFAULT_SETTINGS,
+    InformationPopup,
     PopupWindow,
     SettingsDialog,
     TextPikApp,
+    X11Pointer,
     FunctionWorker,
     build_command_argv,
     clipboard_has_text,
@@ -34,8 +37,6 @@ from src.textpik import (
     normalize_url,
     validate_actions,
 )
-
-
 class CoreHelpersTest(unittest.TestCase):
     def test_version_and_runtime_self_check_do_not_start_gui(self):
         with patch("builtins.print") as output:
@@ -74,6 +75,8 @@ class CoreHelpersTest(unittest.TestCase):
         self.assertNotIn("sway_cursor_anchor(", source)
         self.assertNotIn("get_cursor_pos(", source)
         self.assertNotIn("is_foreground_process_game(", source)
+        self.assertNotIn("order_actions_for_popup", source)
+        self.assertNotIn("ranker.suggest", source)
 
     def test_boolean_strings_are_normalized(self):
         settings = normalize_settings({"sticky_popup": "false", "context_aware": "yes"})
@@ -82,7 +85,7 @@ class CoreHelpersTest(unittest.TestCase):
 
     def test_popup_limit_is_clamped(self):
         self.assertEqual(
-            normalize_settings({"max_popup_actions": 1})["max_popup_actions"], 3
+            normalize_settings({"max_popup_actions": 1})["max_popup_actions"], 8
         )
         self.assertEqual(
             normalize_settings({"max_popup_actions": 99})["max_popup_actions"], 40
@@ -128,6 +131,8 @@ class CoreHelpersTest(unittest.TestCase):
         self.assertIn('"selection_session": 7', report)
 
     def test_context_classification(self):
+        self.assertIn("word", classify_text("precisión"))
+        self.assertNotIn("word", classify_text("dos palabras"))
         self.assertIn("email", classify_text("person@example.com"))
         self.assertIn("ip", classify_text("192.168.1.20"))
         self.assertNotIn("ip", classify_text("999.1.1.1"))
@@ -188,6 +193,146 @@ class SelectionStateTest(unittest.TestCase):
         with patch.object(monitor, "_secondary_button_pressed", return_value=True):
             monitor._selection_event()
         self.assertFalse(monitor.timer_debounce.isActive())
+
+    def test_selection_clear_does_not_preempt_popup_lifetime(self):
+        controller = SimpleNamespace(
+            _begin_selection_session=Mock(),
+            popup=SimpleNamespace(
+                isVisible=lambda: True,
+                is_interacting=lambda: False,
+                pointer_inside=lambda: False,
+            ),
+            pointer=SimpleNamespace(state=lambda: None),
+            _selection_released=True,
+            _last_popup_at=time.monotonic(),
+            hide_popup=Mock(),
+        )
+        TextPikApp._monitor_selection_cleared(controller)
+        controller.hide_popup.assert_not_called()
+
+    def test_selection_clear_with_primary_press_is_an_external_click(self):
+        controller = SimpleNamespace(
+            _begin_selection_session=Mock(),
+            popup=SimpleNamespace(
+                isVisible=lambda: True,
+                is_interacting=lambda: False,
+                pointer_inside=lambda: False,
+            ),
+            pointer=SimpleNamespace(
+                state=lambda: (100, 100, X11Pointer.PRIMARY_MASK)
+            ),
+            _selection_released=True,
+            _last_popup_at=time.monotonic(),
+            hide_popup=Mock(),
+        )
+        TextPikApp._monitor_selection_cleared(controller)
+        controller.hide_popup.assert_called_once_with(invalidate_session=False)
+
+    def test_stable_empty_selection_is_same_window_external_click_fallback(self):
+        controller = SimpleNamespace(
+            _begin_selection_session=Mock(),
+            popup=SimpleNamespace(
+                isVisible=lambda: True,
+                is_interacting=lambda: False,
+                pointer_inside=lambda: False,
+            ),
+            pointer=SimpleNamespace(state=lambda: None),
+            _selection_released=True,
+            _last_popup_at=time.monotonic() - 1,
+            hide_popup=Mock(),
+        )
+        TextPikApp._monitor_selection_cleared(controller)
+        controller.hide_popup.assert_called_once_with(invalidate_session=False)
+
+    def test_primary_click_outside_beats_initial_popup_immunity(self):
+        popup = SimpleNamespace(
+            isVisible=lambda: True,
+            is_interacting=lambda: False,
+            mapFromGlobal=lambda _point: object(),
+            rect=lambda: SimpleNamespace(contains=lambda _point: False),
+        )
+        controller = SimpleNamespace(
+            popup=popup,
+            pointer=SimpleNamespace(
+                state=lambda: (100, 100, X11Pointer.PRIMARY_MASK)
+            ),
+            monitor=SimpleNamespace(suppress_secondary_interaction=Mock()),
+            hide_popup=Mock(),
+            hide_check_timer=Mock(),
+            _popup_immunity_until=float("inf"),
+            _selection_released=True,
+        )
+        TextPikApp.hide_popup_on_external_click(controller)
+        controller.hide_popup.assert_called_once()
+
+    def test_hover_does_not_extend_eight_second_lifetime(self):
+        controller = SimpleNamespace(
+            popup=SimpleNamespace(
+                isVisible=lambda: True,
+                is_interacting=lambda: False,
+                pointer_inside=lambda: True,
+            ),
+            auto_hide_timer=Mock(),
+            hide_popup=Mock(),
+        )
+        TextPikApp._auto_hide_popup(controller)
+        controller.hide_popup.assert_called_once()
+        controller.auto_hide_timer.start.assert_not_called()
+
+    def test_wayland_followup_selection_fragments_are_coalesced(self):
+        monitor = BaseSelectionMonitor(dict(DEFAULT_SETTINGS))
+        monitor._last_emit_at = time.monotonic()
+        with patch("src.textpik.is_wayland", return_value=True):
+            monitor._schedule_read()
+        self.assertGreaterEqual(monitor.timer_debounce.interval(), 180)
+
+    def test_wayland_initial_selection_waits_for_a_stable_drag_edge(self):
+        monitor = BaseSelectionMonitor(dict(DEFAULT_SETTINGS))
+        with patch("src.textpik.is_wayland", return_value=True):
+            monitor._schedule_read()
+        self.assertGreaterEqual(monitor.timer_debounce.interval(), 150)
+
+    def test_kwin_external_activation_beats_popup_immunity(self):
+        popup = SimpleNamespace(
+            isVisible=lambda: True,
+            is_interacting=lambda: False,
+            pointer_inside=lambda: False,
+        )
+        controller = SimpleNamespace(
+            popup=popup,
+            _popup_immunity_until=float("inf"),
+            hide_popup=Mock(),
+        )
+        TextPikApp._on_kwin_window_activated(controller)
+        controller.hide_popup.assert_called_once()
+
+    def test_secondary_click_guard_survives_button_release(self):
+        monitor = BaseSelectionMonitor()
+        with patch.object(monitor, "_secondary_button_pressed", return_value=True):
+            self.assertTrue(monitor.secondary_interaction_active())
+        with patch.object(monitor, "_secondary_button_pressed", return_value=False):
+            self.assertTrue(monitor.secondary_interaction_active())
+            monitor._secondary_guard_until = 0.0
+            self.assertFalse(monitor.secondary_interaction_active())
+
+    def test_secondary_click_closes_popup_even_during_immunity(self):
+        controller = SimpleNamespace(
+            popup=SimpleNamespace(isVisible=lambda: True),
+            pointer=SimpleNamespace(
+                state=lambda: (100, 100, X11Pointer.SECONDARY_MASK)
+            ),
+            monitor=SimpleNamespace(suppress_secondary_interaction=Mock()),
+            hide_popup=Mock(),
+            hide_check_timer=Mock(),
+            _popup_immunity_until=float("inf"),
+        )
+        TextPikApp.hide_popup_on_external_click(controller)
+        controller.monitor.suppress_secondary_interaction.assert_called_once()
+        controller.hide_popup.assert_called_once()
+
+    def test_base_selection_backend_is_explicitly_abstract(self):
+        with self.assertRaises(NotImplementedError):
+            BaseSelectionMonitor()._read_selection_text()
 
     def test_selection_waits_until_primary_button_is_released(self):
         class Monitor(BaseSelectionMonitor):
@@ -255,6 +400,28 @@ class PopupCompositionTest(unittest.TestCase):
         self.assertEqual(center.alpha(), 255)
         self.assertGreater(center.lightness(), 0)
 
+    def test_information_result_uses_an_independent_popup(self):
+        toolbar = PopupWindow(DEFAULT_ACTIONS[:8], None, dict(DEFAULT_SETTINGS))
+        toolbar.resize(240, 33)
+        toolbar.move(100, 100)
+        toolbar.hide()
+        toolbar.show_inline_result(
+            "Estadísticas del texto",
+            "12 palabras · 80 caracteres",
+            "2 oraciones · menos de 1 min de lectura",
+        )
+        self.app.processEvents()
+        result = toolbar.result_popup
+        self.assertIsInstance(result, InformationPopup)
+        self.assertTrue(result.isVisible())
+        self.assertFalse(toolbar.isVisible())
+        self.assertEqual(result.title.text(), "Estadísticas del texto")
+        self.assertIn("12 palabras", result.content.toPlainText())
+        self.assertNotEqual(result.geometry(), toolbar.geometry())
+        result._copy_result()
+        self.assertIn("12 palabras", self.app.clipboard().text())
+        result.close()
+
     def test_popup_theme_does_not_compact_palette_controls(self):
         popup = PopupWindow(DEFAULT_ACTIONS, None, dict(DEFAULT_SETTINGS))
         popup.show()
@@ -286,6 +453,130 @@ class PopupCompositionTest(unittest.TestCase):
         popup.palette.hide()
         popup.hide()
 
+    def test_more_actions_contains_every_catalog_action_not_on_the_bar(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["max_popup_actions"] = 8
+        catalog = DEFAULT_ACTIONS[:15]
+        direct = [catalog[index] for index in (0, 3, 6, 9, 12)]
+        popup = PopupWindow(direct, None, settings)
+        popup.set_actions(direct, palette_actions=catalog)
+        popup.show()
+        self.app.processEvents()
+
+        self.assertEqual(
+            [action["cmd"] for action in popup.visible_actions],
+            [action["cmd"] for action in direct],
+        )
+        self.assertIsNotNone(popup._more_button)
+        popup._more_button.click()
+        self.app.processEvents()
+        expected = [
+            action["cmd"] for action in catalog if action not in direct
+        ]
+        actual = [
+            popup.palette.list.item(index).data(Qt.UserRole)
+            for index in range(popup.palette.list.count())
+        ]
+        self.assertEqual(actual, expected)
+        self.assertEqual(popup.palette.title.text(), "Más acciones")
+        self.assertIn("10 no fijadas", popup.palette.subtitle.text())
+        popup.palette.hide()
+        popup.hide()
+
+    def test_closing_more_actions_also_closes_its_toolbar(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["max_popup_actions"] = 8
+        popup = PopupWindow(DEFAULT_ACTIONS[:12], None, settings)
+        popup.show()
+        self.app.processEvents()
+        popup._more_button.click()
+        self.app.processEvents()
+        self.assertTrue(popup.isVisible())
+        self.assertTrue(popup.palette.isVisible())
+
+        popup.palette.hide()
+        self.app.processEvents()
+
+        self.assertFalse(popup.palette.isVisible())
+        self.assertFalse(popup.isVisible())
+
+    def test_bar_and_overflow_keep_the_configured_order(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["max_popup_actions"] = 8
+        order = [7, 1, 10, 0, 5, 3, 9, 2, 11, 4]
+        actions = [DEFAULT_ACTIONS[index] for index in order]
+        popup = PopupWindow(actions, None, settings)
+        popup.show()
+        self.app.processEvents()
+        self.assertEqual(
+            [action["cmd"] for action in popup.visible_actions],
+            [action["cmd"] for action in actions[:8]],
+        )
+        popup._more_button.click()
+        self.app.processEvents()
+        self.assertEqual(
+            [
+                popup.palette.list.item(index).data(Qt.UserRole)
+                for index in range(popup.palette.list.count())
+            ],
+            [action["cmd"] for action in actions[8:]],
+        )
+        popup.palette.hide()
+        popup.hide()
+
+    def test_popup_width_tracks_the_number_of_integrated_actions(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["max_popup_actions"] = 12
+        settings["popup_compact_actions"] = 8
+        popup = PopupWindow(DEFAULT_ACTIONS[:4], None, settings)
+        popup.show()
+        self.app.processEvents()
+        compact_width = popup.width()
+
+        popup.set_actions(DEFAULT_ACTIONS[:12])
+        self.app.processEvents()
+        expanded_width = popup.width()
+        self.assertGreater(expanded_width, compact_width)
+
+        popup.set_actions(DEFAULT_ACTIONS[:6])
+        self.app.processEvents()
+        self.assertLess(popup.width(), expanded_width)
+        popup.hide()
+
+    def test_repeated_recomposition_never_collapses_to_an_empty_wayland_size(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings["max_popup_actions"] = 8
+        popup = PopupWindow(DEFAULT_ACTIONS[:8], None, settings)
+        popup.show()
+        for count in (12, 8, 15, 9, 14, 8) * 5:
+            popup._actions_key = None
+            popup.set_actions(DEFAULT_ACTIONS[:count])
+            self.app.processEvents()
+            self.assertGreaterEqual(popup.width(), 8 * 25)
+            self.assertGreaterEqual(popup.height(), 25)
+        popup.hide()
+
+    def test_nonactivating_popup_ignores_focus_loss(self):
+        popup = PopupWindow(DEFAULT_ACTIONS[:8], None, dict(DEFAULT_SETTINGS))
+        self.assertTrue(popup.windowFlags() & Qt.WindowDoesNotAcceptFocus)
+        popup.show()
+        self.app.processEvents()
+        popup.keyboard_mode = False
+        popup.hide_if_focus_outside()
+        self.assertTrue(popup.isVisible())
+        popup.hide()
+
+    def test_action_uses_selection_snapshot_if_primary_clears_on_press(self):
+        monitor = SimpleNamespace(get_last_text=lambda: "")
+        popup = PopupWindow(DEFAULT_ACTIONS[:1], monitor, dict(DEFAULT_SETTINGS))
+        popup.set_context(SimpleNamespace(text="texto capturado", application="Editor"))
+        triggered = []
+        popup.action_triggered.connect(
+            lambda command, text: triggered.append((command, text))
+        )
+        popup._on_click(DEFAULT_ACTIONS[0])
+        self.assertEqual(triggered, [("copy", "texto capturado")])
+
     def test_show_all_mode_places_every_action_on_the_bar(self):
         settings = dict(DEFAULT_SETTINGS)
         settings["show_all_popup_actions"] = True
@@ -302,20 +593,25 @@ class PopupCompositionTest(unittest.TestCase):
     def test_adaptive_mode_uses_compact_direct_action_limit(self):
         settings = dict(DEFAULT_SETTINGS)
         settings["max_popup_actions"] = 12
-        settings["popup_compact_actions"] = 4
+        settings["popup_compact_actions"] = 8
         actions = DEFAULT_ACTIONS[:15]
         popup = PopupWindow(actions, None, settings)
         popup.set_actions(actions, compact=True)
         popup.show()
         self.app.processEvents()
 
-        self.assertEqual(len(popup.visible_actions), 4)
-        self.assertEqual(len(popup._action_buttons), 4)
+        self.assertEqual(len(popup.visible_actions), 8)
+        self.assertEqual(len(popup._action_buttons), 8)
         self.assertIsNotNone(popup._more_button)
         self.assertEqual(
             popup._action_buttons[0].accessibleName(), actions[0]["name"]
         )
         self.assertEqual(popup._more_button.accessibleName(), "Más acciones")
+        more_index = popup.buttons_layout.indexOf(popup._more_button)
+        row, column, _row_span, _column_span = (
+            popup.buttons_layout.getItemPosition(more_index)
+        )
+        self.assertEqual((row, column), (0, 8))
         popup.hide()
 
 
@@ -360,6 +656,20 @@ class SettingsAboutTest(unittest.TestCase):
                 opener.call_args.args[0].toString(),
                 "https://github.com/sponsors/pitydah",
             )
+            dialog.close()
+
+    def test_action_editor_persists_the_exact_manual_order(self):
+        actions = list(DEFAULT_ACTIONS[:4])
+        dialog = SettingsDialog(
+            dict(DEFAULT_SETTINGS), actions, self._controller()
+        )
+        moved = dialog.action_list.takeItem(3)
+        dialog.action_list.insertItem(0, moved)
+        _settings, collected = dialog.collect_settings()
+        self.assertEqual(
+            [action["cmd"] for action in collected],
+            [actions[3]["cmd"], actions[0]["cmd"], actions[1]["cmd"], actions[2]["cmd"]],
+        )
         dialog.close()
 
     def test_about_links_reject_non_github_targets(self):

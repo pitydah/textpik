@@ -53,6 +53,17 @@ class PackagingTest(unittest.TestCase):
         for package_manager in ("apk", "xbps-install", "slackpkg"):
             self.assertIn(package_manager, script)
 
+    def test_kwin_bridge_uses_kwin6_signals_and_runs_the_loaded_script(self):
+        bridge = (
+            ROOT / "kwin/textpik-cursor-bridge/contents/code/main.js"
+        ).read_text(encoding="utf-8")
+        installer = (ROOT / "packaging/install.sh").read_text(encoding="utf-8")
+        self.assertIn("workspace.windowActivated", bridge)
+        self.assertIn("workspace.cursorPosChanged", bridge)
+        self.assertIn("!identifyTextPik(client)", bridge)
+        self.assertIn('"/Scripting/Script${script_id}"', installer)
+        self.assertIn("org.kde.kwin.Script.run", installer)
+
     def test_native_package_recipes_exist(self):
         self.assertTrue((ROOT / "packaging/debian/control").is_file())
         self.assertTrue((ROOT / "packaging/rpm/textpik.spec").is_file())

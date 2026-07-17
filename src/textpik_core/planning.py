@@ -20,6 +20,7 @@ class ContextSnapshot:
     text_types: frozenset[str] = frozenset()
     clipboard_has_text: bool = False
     multiline: bool = False
+    undo_available: bool = False
 
     @classmethod
     def from_selection(
@@ -29,6 +30,7 @@ class ContextSnapshot:
         text_types: Iterable[str] = (),
         clipboard_has_text: bool = False,
         multiline: bool = False,
+        undo_available: bool = False,
     ) -> ContextSnapshot:
         return cls(
             application=context.application,
@@ -39,6 +41,7 @@ class ContextSnapshot:
             text_types=frozenset(text_types),
             clipboard_has_text=clipboard_has_text,
             multiline=multiline,
+            undo_available=undo_available,
         )
 
 
@@ -55,13 +58,22 @@ def plan_actions(
     planned = []
     for action in actions:
         action_id = action.get("id", action.get("cmd", ""))
-        if allowed_action_ids is not None and action_id not in allowed_action_ids:
+        pinned = bool(action.get("pinned", False))
+        if (
+            allowed_action_ids is not None
+            and action_id not in allowed_action_ids
+            and not pinned
+        ):
             continue
         if not action.get("enabled", True) or not available(action):
             continue
         if action.get("cmd") == "paste" and (
             not snapshot.clipboard_has_text or not snapshot.editable
         ):
+            continue
+        if action.get("requires_clipboard", False) and not snapshot.clipboard_has_text:
+            continue
+        if action.get("cmd") == "undo" and not snapshot.undo_available:
             continue
         if action.get("requires_editable", False) and not snapshot.editable:
             continue
@@ -70,6 +82,7 @@ def plan_actions(
         contexts = action.get("context", ())
         if (
             context_aware
+            and not pinned
             and snapshot.text_types
             and contexts
             and not any(value in snapshot.text_types for value in contexts)
@@ -82,21 +95,6 @@ def plan_actions(
 def order_actions_for_popup(
     actions: Iterable[Mapping], snapshot: ContextSnapshot
 ) -> list[Mapping]:
-    """Stably promote safe relevant actions while honoring explicit pins."""
-    specific_types = snapshot.text_types - {"text"}
-
-    def score(action):
-        contexts = set(action.get("context", ())) - {"text"}
-        placement = action.get("placement", "contextual")
-        try:
-            priority = max(-100, min(100, int(action.get("priority", 0))))
-        except (TypeError, ValueError):
-            priority = 0
-        return (
-            (10_000 if action.get("pinned", False) else 0)
-            + priority
-            + (35 if contexts & specific_types else 0)
-            + (-1_000 if placement == "palette" else 10 if placement == "bar" else 0)
-        )
-
-    return sorted(actions, key=score, reverse=True)
+    """Compatibility boundary that now guarantees the user's exact order."""
+    del snapshot
+    return list(actions)

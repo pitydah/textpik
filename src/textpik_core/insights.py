@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import math
 import operator
 import re
 from dataclasses import dataclass
@@ -112,12 +113,37 @@ def timezone_insight(text: str, *, now: datetime | None = None) -> InlineInsight
 
 
 def text_statistics(text: str) -> InlineInsight:
-    words = len(text.split())
-    lines = len([line for line in text.splitlines() if line.strip()])
+    word_pattern = re.compile(
+        r"(?:\d+(?:[.,]\d+)*|[^\W\d_]+(?:[’'\-][^\W\d_]+)*)",
+        re.UNICODE,
+    )
+    words = len(word_pattern.findall(text))
+    characters = len(text)
+    characters_without_spaces = sum(not char.isspace() for char in text)
+    lines = len(text.splitlines()) if text else 0
+    paragraphs = len(
+        [value for value in re.split(r"(?:\r?\n\s*){2,}", text.strip()) if value]
+    ) if text.strip() else 0
+    sentence_marks = len(
+        re.findall(r"[.!?…]+(?=(?:[\"'”’»\)\]]*)?(?:\s|$))", text)
+    )
+    sentences = max(1, sentence_marks) if words else 0
+    reading_seconds = math.ceil((words / 200) * 60) if words else 0
+    reading = (
+        "menos de 1 min de lectura"
+        if 0 < reading_seconds < 60
+        else f"{max(1, math.ceil(reading_seconds / 60))} min de lectura"
+        if reading_seconds
+        else "0 min de lectura"
+    )
     return InlineInsight(
         "statistics",
-        "Estadísticas",
-        f"{words} palabras · {len(text)} caracteres · {lines} líneas",
+        "Estadísticas del texto",
+        f"{words} palabras · {characters} caracteres",
+        (
+            f"{characters_without_spaces} sin espacios · {sentences} oraciones · "
+            f"{paragraphs} párrafos · {lines} líneas · {reading}"
+        ),
     )
 
 

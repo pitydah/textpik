@@ -10,8 +10,10 @@ from unittest.mock import patch
 from src.textpik_core.actions import (
     PermissionStore,
     fuzzy_score,
+    infer_category,
     migrate_action,
     transform_text,
+    upgrade_builtin_action_metadata,
 )
 from src.textpik_core.anchors import (
     AnchorResolver,
@@ -28,7 +30,7 @@ from src.textpik_core.selection import (
     evaluate_selection_intent,
     is_file_workspace_selection,
 )
-from src.textpik_core.integration import action_availability
+from src.textpik_core.integration import RuntimeCapabilities, action_availability
 from src.textpik_core.popup_state import PopupPhase, PopupStateMachine
 from src.textpik_core.performance import PerformanceTracker
 from src.textpik_core.execution import executable_name, is_terminal_execution
@@ -55,6 +57,30 @@ from src.textpik_core.text import build_command_argv, classify_text, normalize_u
 
 
 class ActionContractTest(unittest.TestCase):
+    def test_web_ai_providers_are_classified_as_ai(self):
+        self.assertEqual(
+            infer_category("Preguntar a Claude", "xdg-open https://claude.ai"),
+            "IA",
+        )
+        self.assertEqual(
+            infer_category("Preguntar a Gemini", "xdg-open https://gemini.google.com"),
+            "IA",
+        )
+
+    def test_builtin_icon_upgrade_preserves_custom_icons(self):
+        actions = [
+            {"cmd": "insight", "icon": "counter.svg", "context": ["number", "currency", "text"]},
+            {"cmd": "speak", "icon": "/tmp/my-speaker.svg", "context": ["text"]},
+            {"cmd": "uppercase", "icon": "uppercase.svg", "name": "MAYUSCULAS"},
+            {"cmd": "lowercase", "icon": "lowercase.svg", "name": "Mi minúscula"},
+        ]
+        self.assertTrue(upgrade_builtin_action_metadata(actions))
+        self.assertEqual(actions[0]["icon"], "calculator.svg")
+        self.assertEqual(actions[0]["context"], ["number", "currency"])
+        self.assertEqual(actions[1]["icon"], "/tmp/my-speaker.svg")
+        self.assertEqual(actions[2]["name"], "Convertir a mayúsculas")
+        self.assertEqual(actions[3]["name"], "Mi minúscula")
+
     def test_legacy_transform_gets_typed_contract(self):
         action = migrate_action(
             {"name": "Mayúsculas", "icon": "uppercase.svg", "cmd": "uppercase"}
@@ -71,6 +97,29 @@ class ActionContractTest(unittest.TestCase):
         self.assertEqual(transform_text("unique-lines", "b\na\nb"), "b\na")
         encoded = transform_text("base64-encode", "TextPik ✓")
         self.assertEqual(transform_text("base64-decode", encoded), "TextPik ✓")
+
+    def test_premium_case_line_quote_and_list_transformations(self):
+        self.assertEqual(transform_text("uppercase", "árbol Straße"), "ÁRBOL STRASSE")
+        self.assertEqual(transform_text("lowercase", "ÁRBOL ÑANDÚ"), "árbol ñandú")
+        self.assertEqual(
+            transform_text("capitalize", "hOLA MUNDO. ¿cÓMO ESTÁS?\nBIEN."),
+            "Hola mundo. ¿Cómo estás?\nBien.",
+        )
+        self.assertEqual(
+            transform_text("remove-breaks", "Una pala-\nbra \n, bien.\r\nOtra"),
+            "Una palabra, bien. Otra",
+        )
+        self.assertEqual(transform_text("quote-text", '"hola"'), "“hola”")
+        self.assertEqual(transform_text("quote-text", "«hola»"), "“hola”")
+        self.assertEqual(transform_text("quote-text", "“hola”"), "“hola”")
+        self.assertEqual(transform_text("quote-text", "  "), "")
+        self.assertEqual(
+            transform_text(
+                "bullet-list",
+                "- tarea\n1. otra\n-5 grados\n  * anidada",
+            ),
+            "• tarea\n• otra\n• -5 grados\n  • anidada",
+        )
 
     def test_fuzzy_action_search(self):
         self.assertIsNotNone(fuzzy_score("trgoogle", "Traducir con Google"))
@@ -142,6 +191,27 @@ class ActionPlanningTest(unittest.TestCase):
         )
         self.assertEqual([action["id"] for action in planned], ["copy", "count"])
 
+    def test_pinned_action_survives_context_and_profile_bar_filters(self):
+        actions = [
+            {
+                "id": "magnet",
+                "name": "Magnet",
+                "cmd": "open-magnet",
+                "context": ["magnet"],
+                "pinned": True,
+            },
+            {"id": "copy", "name": "Copy", "cmd": "copy"},
+        ]
+        planned = plan_actions(
+            actions,
+            ContextSnapshot(text_types=frozenset({"text"})),
+            allowed_action_ids=frozenset({"copy"}),
+        )
+        self.assertEqual(
+            [action["id"] for action in planned],
+            ["magnet", "copy"],
+        )
+
     def test_planner_filters_editable_and_multiline_actions(self):
         actions = [
             {"name": "Cut", "cmd": "cut", "requires_editable": True},
@@ -151,7 +221,23 @@ class ActionPlanningTest(unittest.TestCase):
         snapshot = ContextSnapshot(editable=True, multiline=True)
         self.assertEqual(len(plan_actions(actions, snapshot)), 2)
 
-    def test_smart_order_promotes_pins_context_and_demotes_palette(self):
+    def test_planner_only_offers_undo_when_a_record_exists(self):
+        actions = [{"name": "Undo", "cmd": "undo"}]
+        self.assertEqual(plan_actions(actions, ContextSnapshot()), [])
+        self.assertEqual(
+            len(plan_actions(actions, ContextSnapshot(undo_available=True))), 1
+        )
+
+    def test_planner_hides_clipboard_dependent_actions_when_empty(self):
+        actions = [
+            {"name": "Compare", "cmd": "compare-clipboard", "requires_clipboard": True}
+        ]
+        self.assertEqual(plan_actions(actions, ContextSnapshot()), [])
+        self.assertEqual(
+            len(plan_actions(actions, ContextSnapshot(clipboard_has_text=True))), 1
+        )
+
+    def test_order_boundary_preserves_manual_order_despite_metadata(self):
         actions = [
             {"cmd": "ocr", "placement": "palette", "priority": 100},
             {"cmd": "open", "context": ["url"], "priority": 20},
@@ -163,7 +249,7 @@ class ActionPlanningTest(unittest.TestCase):
         )
         self.assertEqual(
             [action["cmd"] for action in ordered],
-            ["custom", "open", "copy", "ocr"],
+            ["ocr", "open", "copy", "custom"],
         )
 
 
@@ -315,6 +401,18 @@ class ExecutionPolicyTest(unittest.TestCase):
 
 
 class SettingsContractTest(unittest.TestCase):
+    def test_rc5_popup_limits_migrate_to_eight_direct_actions(self):
+        migrated = normalize_core_settings(
+            {
+                "ui_version": 5,
+                "max_popup_actions": 6,
+                "popup_compact_actions": 4,
+            }
+        )
+        self.assertEqual(migrated["ui_version"], 9)
+        self.assertEqual(migrated["max_popup_actions"], 8)
+        self.assertEqual(migrated["popup_compact_actions"], 8)
+
     def test_legacy_ui_defaults_migrate_without_overwriting_custom_values(self):
         migrated = normalize_core_settings(
             {
@@ -324,12 +422,41 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_background_color": "#123456",
             }
         )
-        self.assertEqual(migrated["ui_version"], 5)
+        self.assertEqual(migrated["ui_version"], 9)
         self.assertEqual(migrated["popup_icon_size"], 17)
         self.assertEqual(migrated["popup_spacing"], 2)
         self.assertEqual(migrated["popup_background_color"], "#123456")
         self.assertEqual(migrated["popup_min_confidence"], 62)
         self.assertEqual(migrated["popup_full_confidence"], 84)
+
+    def test_rc6_stock_popup_behavior_migrates_without_overwriting_custom_values(self):
+        stock = normalize_core_settings(
+            {
+                "ui_version": 6,
+                "popup_auto_hide_ms": 5000,
+                "popup_cursor_gap": 6,
+            }
+        )
+        self.assertEqual(stock["ui_version"], 9)
+        self.assertEqual(stock["popup_auto_hide_ms"], 8000)
+        self.assertEqual(stock["popup_cursor_gap"], 3)
+
+        custom = normalize_core_settings(
+            {
+                "ui_version": 6,
+                "popup_auto_hide_ms": 9000,
+                "popup_cursor_gap": 10,
+            }
+        )
+        self.assertEqual(custom["popup_auto_hide_ms"], 9000)
+        self.assertEqual(custom["popup_cursor_gap"], 10)
+
+    def test_rc7_stock_lifetime_migrates_to_eight_seconds(self):
+        migrated = normalize_core_settings(
+            {"ui_version": 7, "popup_auto_hide_ms": 12000}
+        )
+        self.assertEqual(migrated["ui_version"], 9)
+        self.assertEqual(migrated["popup_auto_hide_ms"], 8000)
 
     def test_settings_schema_drops_unknown_keys_and_bounds_values(self):
         normalized = normalize_core_settings(
@@ -353,7 +480,6 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_min_confidence": 200,
                 "popup_full_confidence": 1,
                 "popup_compact_actions": 99,
-                "popup_dismiss_distance": 9999,
             }
         )
         self.assertTrue(normalized["adaptive_popup"])
@@ -361,7 +487,6 @@ class SettingsContractTest(unittest.TestCase):
         self.assertEqual(normalized["popup_min_confidence"], 90)
         self.assertEqual(normalized["popup_full_confidence"], 50)
         self.assertEqual(normalized["popup_compact_actions"], 8)
-        self.assertEqual(normalized["popup_dismiss_distance"], 800)
 
     def test_color_validation_stays_an_injected_ui_boundary(self):
         calls = []
@@ -440,6 +565,25 @@ class AnchorTest(unittest.TestCase):
         selection = (100, 100, 180, 24)
         x, y = place_popup((280, 124), (160, 40), (0, 0, 800, 600), selection, 6)
         self.assertFalse(100 < x + 160 and x < 280 and 100 < y + 40 and y < 124)
+
+    def test_popup_uses_nearest_clear_cursor_quadrant(self):
+        selection = (100, 100, 180, 24)
+        x, y = place_popup((280, 124), (160, 40), (0, 0, 800, 600), selection, 3)
+        self.assertLessEqual(abs(x - 283), 1)
+        self.assertLessEqual(abs(y - 127), 1)
+
+    def test_explicit_position_preference_overrides_pointer_direction(self):
+        selection = (100, 100, 180, 24)
+        _x, y = place_popup(
+            (280, 124),
+            (160, 40),
+            (0, 0, 800, 600),
+            selection,
+            3,
+            pointer_direction=(40, 0),
+            preference="above",
+        )
+        self.assertEqual(y, 57)
 
     def test_popup_stays_on_screen_near_bottom_right_edge(self):
         x, y = place_popup((795, 595), (160, 40), (0, 0, 800, 600), gap=6)
@@ -569,6 +713,52 @@ class SpellingServiceTest(unittest.TestCase):
 
 
 class IntegrationPolicyTest(unittest.TestCase):
+    @patch("src.textpik_core.integration.which", return_value="/usr/bin/tool")
+    def test_optional_providers_require_their_real_runtime_capability(self, _which):
+        unavailable = RuntimeCapabilities()
+        self.assertFalse(
+            action_availability(
+                "ollama", wayland=True, kde=False, capabilities=unavailable
+            ).available
+        )
+        self.assertFalse(
+            action_availability(
+                "grammar", wayland=True, kde=False, capabilities=unavailable
+            ).available
+        )
+        self.assertFalse(
+            action_availability(
+                "spellcheck", wayland=True, kde=False, capabilities=unavailable
+            ).available
+        )
+
+        ready = RuntimeCapabilities(
+            ollama_model="llama3.2:latest",
+            ocr_languages=("eng",),
+            spelling_language="es_CL",
+            grammar_ready=True,
+        )
+        ollama = action_availability(
+            "ollama", wayland=True, kde=False, capabilities=ready
+        )
+        self.assertTrue(ollama.available)
+        self.assertIn("llama3.2", ollama.label)
+        ocr = action_availability(
+            "ocr-image", wayland=True, kde=False, capabilities=ready
+        )
+        self.assertTrue(ocr.available)
+        self.assertTrue(ocr.degraded)
+
+    def test_private_history_is_hidden_while_feature_is_disabled(self):
+        status = action_availability(
+            "textpik-history",
+            wayland=True,
+            kde=False,
+            history_enabled=False,
+        )
+        self.assertFalse(status.available)
+        self.assertIn("Configuración", status.label)
+
     @patch(
         "src.textpik_core.integration.which",
         side_effect=lambda name: "/usr/bin/tesseract" if name == "tesseract" else None,
@@ -680,6 +870,14 @@ class ExtensionTest(unittest.TestCase):
 
 
 class AtspiTest(unittest.TestCase):
+    def test_cached_menu_focus_suppresses_popup_without_desktop_scan(self):
+        backend = AtspiSelectionBackend(atspi=object())
+        backend._focused_node = object()
+        with patch.object(backend, "_role_name", return_value="popup menu"):
+            self.assertTrue(backend.context_menu_active())
+        with patch.object(backend, "_role_name", return_value="text entry"):
+            self.assertFalse(backend.context_menu_active())
+
     def test_reads_typed_selection_context(self):
         class Rect:
             x = 10

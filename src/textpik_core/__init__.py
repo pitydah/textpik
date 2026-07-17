@@ -50,7 +50,11 @@ from .portal import (
     portal_request_path,
     portal_supports_area,
 )
-from .interaction import PopupComposition, plan_popup_composition, resolve_action_command
+from .interaction import (
+    PopupComposition,
+    plan_popup_composition,
+    resolve_action_command,
+)
 from .utilities import (
     clean_terminal_text,
     color_details,
