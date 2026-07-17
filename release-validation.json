@@ -1,12 +1,22 @@
 {
-  "schema_version": 1,
-  "target_version": "0.4.0",
+  "schema_version": 2,
+  "target_version": "0.5.0",
   "crash_free_rc_cycles": 0,
   "manual_desktop_matrix": {
     "kde_wayland": false,
     "kde_x11": false,
     "gnome_wayland": false,
-    "gnome_x11": false
+    "gnome_x11": false,
+    "hyprland_or_sway_wayland": false
+  },
+  "distribution_matrix": {
+    "debian_stable": false,
+    "ubuntu_lts": false,
+    "fedora": false,
+    "arch_clean_chroot": false,
+    "flatpak_wayland": false,
+    "flatpak_x11": false,
+    "appimage_clean_host": false
   },
   "accessibility_reviewed": false,
   "translations_reviewed": false

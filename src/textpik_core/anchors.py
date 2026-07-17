@@ -6,11 +6,38 @@ import json
 import shutil
 import subprocess
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from .models import AnchorSource, PopupAnchor
 
 
-def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
+SOURCE_WEIGHT = {
+    AnchorSource.ATSPI_SELECTION: 0.08,
+    AnchorSource.KWIN: 0.07,
+    AnchorSource.HYPRLAND: 0.06,
+    AnchorSource.SWAY: 0.06,
+    AnchorSource.X11_POINTER: 0.05,
+    AnchorSource.QT_POINTER: 0.0,
+    AnchorSource.SCREEN_FALLBACK: -0.1,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class AnchorDecision:
+    anchor: PopupAnchor | None
+    considered: int
+    reason: str
+
+
+def place_popup(
+    anchor,
+    popup_size,
+    screen_rect,
+    avoid_rect=None,
+    gap=6,
+    pointer_direction=None,
+    preference="auto",
+):
     """Place a popup using a small deterministic candidate score.
 
     The candidate set is deliberately bounded: placement stays constant-time on
@@ -24,11 +51,16 @@ def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
     if avoid_rect:
         rx, ry, rw, rh = avoid_rect
         candidates = [
+            # Cursor-local quadrants keep the toolbar close to the final drag
+            # edge. The overlap score rejects whichever side covers selection.
+            (ax + gap, ay + gap),
+            (ax + gap, ay - height - gap),
+            (ax - width - gap, ay + gap),
+            (ax - width - gap, ay - height - gap),
             (ax - width // 2, ry - height - gap),
             (ax - width // 2, ry + rh + gap),
             (rx + rw + gap, ay - height // 2),
             (rx - width - gap, ay - height // 2),
-            (ax + gap, ay + gap),
         ]
     else:
         candidates = [
@@ -37,6 +69,23 @@ def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
             (ax - width - gap, ay + gap),
             (ax - width - gap, ay - height - gap),
         ]
+
+    if (
+        pointer_direction
+        and len(candidates) >= 4
+        and (not avoid_rect or preference == "auto")
+    ):
+        dx, dy = pointer_direction
+        if abs(dx) > abs(dy):
+            preferred = 3 if dx > 0 else 2
+        else:
+            preferred = 0 if dy > 0 else 1
+        candidates.insert(0, candidates.pop(preferred))
+    explicit_preferred = None
+    if avoid_rect and preference in {"above", "below", "side"}:
+        preferred = {"above": 4, "below": 5, "side": 6}[preference]
+        candidates.insert(0, candidates.pop(preferred))
+        explicit_preferred = candidates[0]
 
     def clamp(value, low, high):
         return min(max(value, low), max(low, high))
@@ -54,12 +103,20 @@ def place_popup(anchor, popup_size, screen_rect, avoid_rect=None, gap=6):
         x = clamp(raw_x, sx, right - width)
         y = clamp(raw_y, sy, bottom - height)
         displacement = abs(x - raw_x) + abs(y - raw_y)
-        distance = abs((x + width // 2) - ax) + abs((y + height // 2) - ay)
+        # Measure the pointer-to-edge distance, not pointer-to-center. A wide
+        # toolbar can be easy to reach even when its visual center is far away.
+        cursor_dx = max(x - ax, 0, ax - (x + width))
+        cursor_dy = max(y - ay, 0, ay - (y + height))
+        distance = cursor_dx + cursor_dy
         covers_anchor = x <= ax <= x + width and y <= ay <= y + height
         score = (
             overlap_area(x, y) * 10_000
             + int(covers_anchor) * 1_000_000
             + displacement * 80
+            + int(
+                explicit_preferred is not None
+                and (raw_x, raw_y) != explicit_preferred
+            ) * 500
             + distance
             + order
         )
@@ -100,10 +157,33 @@ class AnchorResolver:
     """Selects the freshest, most trustworthy anchor without desktop coupling."""
 
     def resolve(self, candidates: Iterable[PopupAnchor | None]) -> PopupAnchor | None:
+        return self.resolve_with_reason(candidates).anchor
+
+    def resolve_with_reason(self, candidates: Iterable[PopupAnchor | None]) -> AnchorDecision:
         usable = [candidate for candidate in candidates if candidate and candidate.fresh]
         if not usable:
-            return None
-        return max(usable, key=lambda item: (item.confidence, item.created_at))
+            return AnchorDecision(None, 0, "no-fresh-anchor")
+        winner = max(
+            usable,
+            key=lambda item: (
+                min(1.0, item.confidence + SOURCE_WEIGHT.get(item.source, 0.0)),
+                item.created_at,
+            ),
+        )
+        return AnchorDecision(winner, len(usable), winner.source.value)
+
+
+def scale_anchor(anchor: PopupAnchor, scale: float) -> PopupAnchor:
+    """Normalize logical compositor coordinates to Qt device coordinates."""
+    try:
+        scale = float(scale)
+    except (TypeError, ValueError):
+        scale = 1.0
+    scale = min(4.0, max(0.5, scale))
+    return PopupAnchor(
+        round(anchor.x * scale), round(anchor.y * scale), anchor.source,
+        anchor.confidence, anchor.created_at, anchor.ttl,
+    )
 
 
 def _run_json(argv: list[str], timeout: float = 0.35):

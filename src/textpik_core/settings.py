@@ -5,26 +5,37 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from .profiles import normalize_profiles
+from .media import normalize_torrent_servers
 
 
 DEFAULT_SETTINGS = {
-    "ui_version": 3,
+    "ui_version": 9,
     "show_on_selection": True,
     "start_at_login": True,
     "popup_delay_ms": 0,
-    "popup_auto_hide_ms": 5000,
+    "adaptive_delay_enabled": True,
+    "adaptive_delay_min_ms": 55,
+    "adaptive_delay_max_ms": 180,
+    "popup_auto_hide_ms": 8000,
     "max_selection_length": 5000,
     "max_popup_actions": 8,
     "show_all_popup_actions": False,
+    "popup_allow_two_rows": True,
+    "popup_position_preference": "auto",
     "confirm_terminal_execution": True,
     "context_aware": True,
+    "history_enabled": False,
+    "history_max_items": 100,
+    "history_max_age_days": 30,
+    "spelling_ignored_words": [],
+    "spelling_personal_words": [],
     "context_profiles_enabled": False,
     "context_profiles": [],
     "spelling_action_migrated": False,
     "adaptive_popup": True,
-    "popup_min_confidence": 45,
-    "popup_full_confidence": 78,
-    "popup_compact_actions": 4,
+    "popup_min_confidence": 62,
+    "popup_full_confidence": 84,
+    "popup_compact_actions": 8,
     "sticky_popup": False,
     "show_numeric_badges": False,
     "enable_global_hotkey": False,
@@ -38,7 +49,7 @@ DEFAULT_SETTINGS = {
     "popup_icon_size": 17,
     "popup_button_padding": 4,
     "popup_spacing": 2,
-    "popup_cursor_gap": 6,
+    "popup_cursor_gap": 3,
     "popup_border_radius": 12,
     "popup_opacity": 0.99,
     "popup_wayland_fallback_top": 96,
@@ -63,6 +74,7 @@ DEFAULT_SETTINGS = {
     "blocked_activities_enabled": False,
     "blocked_activities": [],
     "theme_preset": "custom",
+    "torrent_servers": [],
 }
 
 
@@ -98,7 +110,6 @@ def normalize_settings(
             normalized[key] = settings[key]
 
     if ui_version < 3:
-        normalized["ui_version"] = 3
         if normalized.get("popup_icon_size") == 18:
             normalized["popup_icon_size"] = 17
         if normalized.get("popup_border_radius") == 13:
@@ -109,14 +120,61 @@ def normalize_settings(
             normalized["popup_background_color"] = "#18181b"
         if normalized.get("popup_border_color") == "#45474c":
             normalized["popup_border_color"] = "#3f3f46"
+    if ui_version < 4:
+        normalized["ui_version"] = 4
+    if ui_version < 5:
+        if normalized.get("max_popup_actions") == 8:
+            normalized["max_popup_actions"] = 6
+        if normalized.get("popup_min_confidence") == 45:
+            normalized["popup_min_confidence"] = 62
+        if normalized.get("popup_full_confidence") == 78:
+            normalized["popup_full_confidence"] = 84
+        normalized["ui_version"] = 5
+    if ui_version < 6:
+        try:
+            normalized["max_popup_actions"] = max(
+                8, int(normalized.get("max_popup_actions", 8))
+            )
+        except (TypeError, ValueError):
+            normalized["max_popup_actions"] = 8
+        try:
+            normalized["popup_compact_actions"] = max(
+                8, int(normalized.get("popup_compact_actions", 8))
+            )
+        except (TypeError, ValueError):
+            normalized["popup_compact_actions"] = 8
+        normalized["ui_version"] = 6
+    if ui_version < 7:
+        # Upgrade only the former stock behavior. Deliberate user values are
+        # preserved while existing installs gain a calmer, closer popup.
+        if normalized.get("popup_auto_hide_ms") == 5000:
+            normalized["popup_auto_hide_ms"] = 12000
+        if normalized.get("popup_cursor_gap") == 6:
+            normalized["popup_cursor_gap"] = 3
+        normalized["ui_version"] = 7
+    if ui_version < 8:
+        if normalized.get("popup_auto_hide_ms") == 12000:
+            normalized["popup_auto_hide_ms"] = 8000
+        normalized["ui_version"] = 8
+    if ui_version < 9:
+        normalized["ui_version"] = 9
 
     _normalize_int(normalized, "popup_delay_ms", minimum=0)
+    _normalize_int(normalized, "adaptive_delay_min_ms", minimum=30, maximum=200)
+    _normalize_int(normalized, "adaptive_delay_max_ms", minimum=60, maximum=250)
+    if normalized["adaptive_delay_max_ms"] < normalized["adaptive_delay_min_ms"]:
+        normalized["adaptive_delay_max_ms"] = normalized["adaptive_delay_min_ms"]
     _normalize_int(normalized, "popup_auto_hide_ms", minimum=0, maximum=30000)
     _normalize_int(normalized, "max_selection_length", minimum=1)
-    _normalize_int(normalized, "max_popup_actions", minimum=3, maximum=40)
+    _normalize_int(normalized, "max_popup_actions", minimum=8, maximum=40)
     _normalize_int(normalized, "popup_min_confidence", minimum=0, maximum=90)
     _normalize_int(normalized, "popup_full_confidence", minimum=50, maximum=100)
-    _normalize_int(normalized, "popup_compact_actions", minimum=3, maximum=8)
+    _normalize_int(normalized, "popup_compact_actions", minimum=8, maximum=40)
+    normalized["popup_compact_actions"] = min(
+        normalized["popup_compact_actions"], normalized["max_popup_actions"]
+    )
+    _normalize_int(normalized, "history_max_items", minimum=10, maximum=1000)
+    _normalize_int(normalized, "history_max_age_days", minimum=1, maximum=3650)
     _normalize_int(normalized, "popup_icon_size", minimum=12, maximum=64)
     _normalize_int(normalized, "popup_button_padding", minimum=2, maximum=12)
     _normalize_int(normalized, "popup_spacing", minimum=0, maximum=8)
@@ -135,6 +193,8 @@ def normalize_settings(
         normalized["popup_wayland_fallback_horizontal"] = DEFAULT_SETTINGS[
             "popup_wayland_fallback_horizontal"
         ]
+    if normalized.get("popup_position_preference") not in ("auto", "above", "below", "side"):
+        normalized["popup_position_preference"] = "auto"
 
     for key in (
         "show_on_selection",
@@ -145,12 +205,15 @@ def normalize_settings(
         "blocked_apps_enabled",
         "blocked_activities_enabled",
         "context_aware",
+        "history_enabled",
         "context_profiles_enabled",
         "spelling_action_migrated",
         "adaptive_popup",
         "sticky_popup",
         "show_numeric_badges",
         "show_all_popup_actions",
+        "popup_allow_two_rows",
+        "adaptive_delay_enabled",
         "enable_global_hotkey",
         "disable_in_sensitive_fields",
         "ignore_file_selections",
@@ -180,6 +243,22 @@ def normalize_settings(
     normalized["context_profiles"] = normalize_profiles(
         normalized.get("context_profiles", [])
     )
+    normalized["torrent_servers"] = normalize_torrent_servers(
+        normalized.get("torrent_servers", [])
+    )
+    for key in ("spelling_ignored_words", "spelling_personal_words"):
+        values = normalized.get(key, [])
+        normalized[key] = (
+            list(
+                dict.fromkeys(
+                    str(value).strip().casefold()
+                    for value in values[:500]
+                    if str(value).strip()
+                )
+            )
+            if isinstance(values, list)
+            else []
+        )
 
     if normalized.get("theme_preset") not in ("custom", "dark", "light", "oled"):
         normalized["theme_preset"] = "custom"

@@ -1,21 +1,21 @@
 Name:           textpik
-Version:        0.4.0
+Version:        0.5.0
 Release:        0.rc1%{?dist}
 Summary:        Compact action bar for selected text
 License:        GPL-3.0-or-later
 URL:            https://github.com/pitydah/textpik
-Source0:        %{url}/archive/refs/tags/v0.4.0-rc.1.tar.gz
+Source0:        %{url}/archive/refs/tags/v0.5.0-rc.1.tar.gz
 BuildArch:      noarch
-BuildRequires:  python3-devel python3-pip pyproject-rpm-macros
+BuildRequires:  python3-devel python3-pip python3-setuptools pyproject-rpm-macros
 Requires:       python3-pyside6 python3-gobject at-spi2-core xdg-utils
 Recommends:     wl-clipboard xdotool
-Suggests:       python3-pyenchant hunspell-es
+Suggests:       python3-pyenchant hunspell-es tesseract
 
 %description
 TextPik shows context-aware actions next to selected text on Linux desktops.
 
 %prep
-%autosetup -n textpik-0.4.0-rc.1
+%autosetup -n textpik-0.5.0-rc.1
 
 %build
 %pyproject_wheel

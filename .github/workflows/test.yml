@@ -30,6 +30,12 @@ jobs:
           sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
       - run: python -m pip install -e . ruff coverage build twine
       - run: python -m unittest discover -s tests -v
+      - run: python scripts/check_performance.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Exercise 500 popup lifecycles
+        if: matrix.python == '3.11'
+        run: python scripts/check_app_stability.py
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python -m py_compile src/textpik.py src/textpik_core/*.py
@@ -59,14 +65,19 @@ jobs:
             debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools
       - run: desktop-file-validate packaging/textpik.desktop
       - run: appstreamcli validate --no-net packaging/io.github.pitydah.textpik.metainfo.xml
-      - run: bash -n packaging/install.sh packaging/run.sh packaging/appimage/build.sh packaging/debian/build.sh packaging/rpm/build.sh
+      - run: >-
+          bash -n packaging/install.sh packaging/run.sh
+          packaging/appimage/build.sh packaging/appimage/build-container.sh
+          packaging/arch/build-container.sh packaging/flatpak/build.sh
+          packaging/debian/build.sh packaging/rpm/build.sh
       - run: python -m json.tool packaging/flatpak/io.github.pitydah.textpik.json >/dev/null
       - run: python scripts/check_release.py
       - name: Build and inspect Debian package
         run: |
           packaging/debian/build.sh
           dpkg-deb --info dist/textpik_*_all.deb
-          dpkg-deb --contents dist/textpik_*_all.deb | grep -q './usr/bin/textpik'
+          dpkg-deb --contents dist/textpik_*_all.deb > "$RUNNER_TEMP/textpik-deb-contents"
+          grep -q './usr/bin/textpik' "$RUNNER_TEMP/textpik-deb-contents"
       - name: Build and inspect Fedora packages
         run: |
           docker run --rm -v "$PWD:/source" -w /source fedora:latest bash -lc '
@@ -74,7 +85,8 @@ jobs:
             git config --global --add safe.directory /source
             packaging/rpm/build.sh
             rpm -qpi dist/textpik-*.noarch.rpm
-            rpm -qlp dist/textpik-*.noarch.rpm | grep -q /usr/bin/textpik
+            rpm -qlp dist/textpik-*.noarch.rpm > /tmp/textpik-rpm-contents
+            grep -q /usr/bin/textpik /tmp/textpik-rpm-contents
           '
 
   x11-smoke:

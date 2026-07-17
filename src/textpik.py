@@ -21,8 +21,21 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import quote_plus
 
+if len(sys.argv) >= 2 and sys.argv[1] in {"--self-check", "--self-check-gui"}:
+    # Some minimal package-test images ship libatspi without an accessibility
+    # bus. Prevent its import-time bridge from aborting the diagnostic process.
+    os.environ.setdefault("NO_AT_BRIDGE", "1")
+
 try:
-    from textpik_core.actions import PermissionStore, fuzzy_score, migrate_action, transform_text
+    from textpik_core.actions import (
+        PermissionStore,
+        TRANSFORMS,
+        fuzzy_score,
+        migrate_action,
+        stable_action_id,
+        transform_text,
+        upgrade_builtin_action_metadata,
+    )
     from textpik_core.anchors import (
         AnchorResolver,
         hyprland_cursor_anchor,
@@ -33,7 +46,11 @@ try:
     from textpik_core.atspi import AtspiSelectionBackend
     from textpik_core.extensions import inspect_local_extensions
     from textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
-    from textpik_core.integration import action_availability
+    from textpik_core.integration import (
+        RuntimeCapabilities,
+        action_availability,
+        probe_runtime_capabilities,
+    )
     from textpik_core.execution import is_terminal_execution as core_is_terminal_execution
     from textpik_core.performance import PerformanceTracker
     from textpik_core.platform import (
@@ -43,10 +60,46 @@ try:
         is_kde_desktop,
         is_wayland_session,
     )
-    from textpik_core.planning import ContextSnapshot, plan_actions
+    from textpik_core.planning import (
+        ContextSnapshot,
+        plan_actions,
+    )
     from textpik_core.profiles import resolve_profile
-    from textpik_core.selection import evaluate_selection_intent
+    from textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
+    from textpik_core.interaction import (
+        modifier_key,
+        plan_popup_composition,
+        resolve_action_command,
+    )
+    from textpik_core.utilities import (
+        clean_terminal_text,
+        color_details,
+        compare_text,
+        extract_entities,
+        format_json,
+        slugify,
+    )
     from textpik_core.spelling import SpellingService
+    from textpik_core.grammar import LanguageToolService, apply_suggestions
+    from textpik_core.insights import local_insight, text_statistics
+    from textpik_core.undo import UndoManager
+    from textpik_core.providers import OllamaProvider, TesseractProvider
+    from textpik_core.history import HistoryStore
+    from textpik_core.media import (
+        default_desktop_handler,
+        media_player_command,
+        normalize_magnet,
+        send_magnet_to_server,
+    )
+    from textpik_core.health import CrashSentinel
+    from textpik_core.automation import (
+        AUTOMATION_TEMPLATES,
+        automation_matches,
+        automation_template,
+        preview_automation,
+    )
+    from textpik_core.portal import capture_xdg_screenshot
+    from textpik_core.wasi import run_wasi
     from textpik_core.settings import (
         DEFAULT_SETTINGS,
         normalize_bool as normalize_core_bool,
@@ -56,7 +109,15 @@ try:
     from textpik_core.popup_state import PopupPhase, PopupStateMachine
     from textpik_core.text import build_command_argv, classify_text, normalize_url
 except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
-    from .textpik_core.actions import PermissionStore, fuzzy_score, migrate_action, transform_text
+    from .textpik_core.actions import (
+        PermissionStore,
+        TRANSFORMS,
+        fuzzy_score,
+        migrate_action,
+        stable_action_id,
+        transform_text,
+        upgrade_builtin_action_metadata,
+    )
     from .textpik_core.anchors import (
         AnchorResolver,
         hyprland_cursor_anchor,
@@ -67,7 +128,11 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.atspi import AtspiSelectionBackend
     from .textpik_core.extensions import inspect_local_extensions
     from .textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
-    from .textpik_core.integration import action_availability
+    from .textpik_core.integration import (
+        RuntimeCapabilities,
+        action_availability,
+        probe_runtime_capabilities,
+    )
     from .textpik_core.execution import (
         is_terminal_execution as core_is_terminal_execution,
     )
@@ -79,10 +144,46 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
         is_kde_desktop,
         is_wayland_session,
     )
-    from .textpik_core.planning import ContextSnapshot, plan_actions
+    from .textpik_core.planning import (
+        ContextSnapshot,
+        plan_actions,
+    )
     from .textpik_core.profiles import resolve_profile
-    from .textpik_core.selection import evaluate_selection_intent
+    from .textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
+    from .textpik_core.interaction import (
+        modifier_key,
+        plan_popup_composition,
+        resolve_action_command,
+    )
+    from .textpik_core.utilities import (
+        clean_terminal_text,
+        color_details,
+        compare_text,
+        extract_entities,
+        format_json,
+        slugify,
+    )
     from .textpik_core.spelling import SpellingService
+    from .textpik_core.grammar import LanguageToolService, apply_suggestions
+    from .textpik_core.insights import local_insight, text_statistics
+    from .textpik_core.undo import UndoManager
+    from .textpik_core.providers import OllamaProvider, TesseractProvider
+    from .textpik_core.history import HistoryStore
+    from .textpik_core.media import (
+        default_desktop_handler,
+        media_player_command,
+        normalize_magnet,
+        send_magnet_to_server,
+    )
+    from .textpik_core.health import CrashSentinel
+    from .textpik_core.automation import (
+        AUTOMATION_TEMPLATES,
+        automation_matches,
+        automation_template,
+        preview_automation,
+    )
+    from .textpik_core.portal import capture_xdg_screenshot
+    from .textpik_core.wasi import run_wasi
     from .textpik_core.settings import (
         DEFAULT_SETTINGS,
         normalize_bool as normalize_core_bool,
@@ -211,9 +312,11 @@ from PySide6.QtWidgets import (  # noqa: E402
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -232,7 +335,7 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 
 APP_NAME = "textpik"
-APP_VERSION = "0.4.0-rc.1"
+APP_VERSION = "0.5.0-rc.1"
 GITHUB_PROFILE_URL = "https://github.com/pitydah"
 GITHUB_SPONSORS_URL = "https://github.com/sponsors/pitydah"
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -264,16 +367,110 @@ AUTOSTART_FILE = Path.home() / ".config" / "autostart" / "textpik.desktop"
 PERMISSIONS_FILE = CONFIG_DIR / "permissions.json"
 EXTENSIONS_DIR = Path.home() / ".local" / "share" / APP_NAME / "extensions"
 LOG_FILE = CACHE_DIR / "textpik.log"
+RUN_SENTINEL_FILE = CACHE_DIR / "running.json"
+HISTORY_FILE = CONFIG_DIR / "history.json"
+AUTOMATIONS_FILE = CONFIG_DIR / "automations.json"
 
 DEFAULT_ACTIONS = [
-    {"name": "Copiar", "icon": "copy.svg", "cmd": "copy", "enabled": True},
+    {
+        "name": "Copiar", "icon": "copy.svg", "cmd": "copy", "enabled": True,
+        "placement": "bar", "priority": 100,
+    },
+    {
+        "name": "Cortar", "icon": "cut.svg", "cmd": "cut", "enabled": True,
+        "requires_editable": True, "placement": "bar", "priority": 98,
+    },
     {"name": "Pegar", "icon": "paste.svg", "cmd": "paste", "enabled": True},
+    {
+        "name": "Recortar espacios", "icon": "trim.svg", "cmd": "trim",
+        "enabled": True, "context": ["text"], "priority": 86,
+        "variants": {"alt": "copy-transform:trim"},
+    },
+    {
+        "name": "Normalizar espacios", "icon": "normalize-spaces.svg",
+        "cmd": "normalize-spaces", "enabled": True, "context": ["text"],
+        "priority": 84, "variants": {"alt": "copy-transform:normalize-spaces"},
+    },
+    {
+        "name": "Capitalizar oraciones", "icon": "sentence-case.svg", "cmd": "capitalize",
+        "enabled": True, "context": ["text"], "priority": 80,
+        "variants": {"alt": "copy-transform:capitalize"},
+    },
+    {
+        "name": "Tipo título", "icon": "title-case.svg", "cmd": "title-case",
+        "enabled": True, "context": ["text"], "priority": 78,
+        "variants": {"alt": "copy-transform:title-case"},
+    },
+    {
+        "name": "Añadir comillas tipográficas", "icon": "quote-text.svg", "cmd": "quote-text",
+        "enabled": True, "context": ["text"], "priority": 76,
+        "variants": {"alt": "copy-transform:quote-text"},
+    },
+    {
+        "name": "Crear lista con viñetas", "icon": "bullet-list.svg", "cmd": "bullet-list",
+        "enabled": True, "context": ["text"], "requires_multiline": True,
+        "priority": 74, "variants": {"alt": "copy-transform:bullet-list"},
+    },
+    {
+        "name": "Ordenar líneas", "icon": "sort-lines.svg", "cmd": "sort-lines",
+        "enabled": True, "context": ["text"], "requires_multiline": True,
+        "priority": 72, "variants": {"alt": "copy-transform:sort-lines"},
+    },
+    {
+        "name": "Eliminar líneas duplicadas", "icon": "unique-lines.svg",
+        "cmd": "unique-lines", "enabled": True, "context": ["text"],
+        "requires_multiline": True, "priority": 70,
+        "variants": {"alt": "copy-transform:unique-lines"},
+    },
+    {
+        "name": "Codificar URL", "icon": "url-code.svg", "cmd": "url-encode",
+        "enabled": True, "context": ["url", "text"], "placement": "palette",
+        "variants": {"alt": "copy-transform:url-encode"},
+    },
+    {
+        "name": "Decodificar URL", "icon": "url-decode.svg", "cmd": "url-decode",
+        "enabled": True, "context": ["url", "text"], "placement": "palette",
+        "variants": {"alt": "copy-transform:url-decode"},
+    },
+    {
+        "name": "Base64", "icon": "base64.svg", "cmd": "base64-encode",
+        "enabled": True, "context": ["text", "code"], "placement": "palette",
+        "variants": {"alt": "base64-decode"},
+    },
+    {
+        "name": "Escapar HTML", "icon": "html-code.svg", "cmd": "html-escape",
+        "enabled": True, "context": ["text", "code"], "placement": "palette",
+        "variants": {"alt": "html-unescape"},
+    },
     {
         "name": "Abrir link en una pestaña nueva",
         "icon": "open-link.svg",
         "cmd": "open-url",
         "enabled": True,
         "context": ["url"],
+    },
+    {
+        "name": "Abrir magnet en cliente torrent",
+        "icon": "magnet.svg",
+        "cmd": "open-magnet",
+        "enabled": True,
+        "context": ["magnet"],
+    },
+    {
+        "name": "Enviar magnet a servidor",
+        "icon": "torrent-server.svg",
+        "cmd": "send-magnet",
+        "enabled": True,
+        "context": ["magnet"],
+        "permissions": ["network"],
+    },
+    {
+        "name": "Abrir en reproductor local",
+        "icon": "media-player.svg",
+        "cmd": "open-media-player",
+        "enabled": True,
+        "context": ["url", "stream-url"],
+        "permissions": ["process"],
     },
     {
         "name": "Buscar en Google",
@@ -294,7 +491,7 @@ DEFAULT_ACTIONS = [
         "icon": "search-maps.svg",
         "cmd": "xdg-open 'https://www.google.com/maps?q={url}'",
         "enabled": True,
-        "context": ["text"],
+        "context": ["text", "coordinates"],
     },
     {
         "name": "Preguntar a ChatGPT",
@@ -311,6 +508,20 @@ DEFAULT_ACTIONS = [
         "context": ["text"],
     },
     {
+        "name": "Preguntar a Claude",
+        "icon": "claude.svg",
+        "cmd": "xdg-open 'https://claude.ai/new?q={url}'",
+        "enabled": True,
+        "context": ["text"],
+    },
+    {
+        "name": "Preguntar a Gemini",
+        "icon": "gemini.svg",
+        "cmd": "xdg-open 'https://gemini.google.com/app?q={url}'",
+        "enabled": True,
+        "context": ["text"],
+    },
+    {
         "name": "Buscar en DuckDuckGo",
         "icon": "duckduckgo.svg",
         "cmd": "xdg-open 'https://duckduckgo.com/?q={url}'",
@@ -322,7 +533,7 @@ DEFAULT_ACTIONS = [
         "icon": "terminal.svg",
         "cmd": "terminal",
         "enabled": True,
-        "context": ["text", "code", "ip", "number"],
+        "context": ["code", "ip", "number", "path", "error"],
     },
     {"name": "Imprimir", "icon": "print.svg", "cmd": "print", "enabled": True},
     {
@@ -356,8 +567,8 @@ DEFAULT_ACTIONS = [
         "enabled": True,
     },
     {
-        "name": "Contar palabras",
-        "icon": "counter.svg",
+        "name": "Contar texto",
+        "icon": "count-words.svg",
         "cmd": "count",
         "enabled": True,
     },
@@ -369,34 +580,125 @@ DEFAULT_ACTIONS = [
         "context": ["text"],
     },
     {
-        "name": "MAYUSCULAS",
+        "name": "Calcular o convertir",
+        "icon": "calculator.svg",
+        "cmd": "insight",
+        "enabled": True,
+        "context": ["number", "currency"],
+    },
+    {
+        "name": "Revisar gramática",
+        "icon": "grammar.svg",
+        "cmd": "grammar",
+        "enabled": True,
+        "context": ["text"],
+        "permissions": ["network"],
+    },
+    {
+        "name": "Deshacer cambio",
+        "icon": "undo.svg",
+        "cmd": "undo",
+        "enabled": True,
+        "context": ["text"],
+    },
+    {
+        "name": "Historial privado de TextPik",
+        "icon": "history.svg",
+        "cmd": "textpik-history",
+        "enabled": True,
+    },
+    {
+        "name": "OCR de imagen",
+        "icon": "ocr-image.svg",
+        "cmd": "ocr-image",
+        "enabled": True,
+        "permissions": ["filesystem", "process"],
+    },
+    {
+        "name": "OCR de región de pantalla",
+        "icon": "ocr-region.svg",
+        "cmd": "ocr-region",
+        "enabled": True,
+        "permissions": ["filesystem", "process"],
+    },
+    {
+        "name": "Convertir a mayúsculas",
         "icon": "uppercase.svg",
         "cmd": "uppercase",
         "enabled": True,
+        "variants": {"alt": "copy-transform:uppercase"},
     },
     {
-        "name": "minusculas",
+        "name": "Convertir a minúsculas",
         "icon": "lowercase.svg",
         "cmd": "lowercase",
         "enabled": True,
+        "variants": {"alt": "copy-transform:lowercase"},
     },
     {
-        "name": "Capitalizar",
-        "icon": "capitalize.svg",
-        "cmd": "capitalize",
-        "enabled": True,
-    },
-    {
-        "name": "Quitar saltos",
+        "name": "Unir líneas limpiamente",
         "icon": "remove-breaks.svg",
         "cmd": "remove-breaks",
         "enabled": True,
+        "variants": {"alt": "copy-transform:remove-breaks"},
+    },
+    {
+        "name": "Formatear JSON",
+        "icon": "json.svg",
+        "cmd": "format-json",
+        "enabled": True,
+        "context": ["json"],
+        "variants": {"alt": "minify-json"},
+    },
+    {
+        "name": "Extraer datos",
+        "icon": "extract-entities.svg",
+        "cmd": "extract-entities",
+        "enabled": True,
+        "context": ["text", "url", "email"],
+    },
+    {
+        "name": "Convertir color",
+        "icon": "color-picker.svg",
+        "cmd": "color-details",
+        "enabled": True,
+        "context": ["color"],
+    },
+    {
+        "name": "Crear slug",
+        "icon": "slug.svg",
+        "cmd": "slugify",
+        "enabled": True,
+        "context": ["text"],
+    },
+    {
+        "name": "Limpiar salida de terminal",
+        "icon": "terminal-clean.svg",
+        "cmd": "clean-terminal",
+        "enabled": True,
+        "context": ["error", "code"],
+    },
+    {
+        "name": "Comparar con portapapeles",
+        "icon": "compare.svg",
+        "cmd": "compare-clipboard",
+        "enabled": True,
+        "context": ["text", "code", "json"],
+        "requires_clipboard": True,
+    },
+    {
+        "name": "Leer en voz alta",
+        "icon": "speak.svg",
+        "cmd": "speak",
+        "enabled": True,
+        "context": ["text"],
     },
     {
         "name": "Diccionario RAE",
         "icon": "dictionary.svg",
         "cmd": "xdg-open 'https://dle.rae.es/{url}'",
         "enabled": True,
+        "context": ["word"],
     },
 ]
 
@@ -470,6 +772,8 @@ def setup_logging(settings):
 
 
 class X11Pointer:
+    PRIMARY_MASK = 0x100
+    SECONDARY_MASK = 0x400
     BUTTON_MASKS = 0x100 | 0x200 | 0x400 | 0x800 | 0x1000
 
     def __init__(self):
@@ -834,6 +1138,7 @@ class BaseSelectionMonitor(QObject):
         self._last_emit_text = ""
         self._last_emit_at = 0.0
         self._suppress_events_until = 0.0
+        self._secondary_guard_until = 0.0
         self._revision = 0
         self._scheduled_revision = 0
         self._pointer = X11Pointer()
@@ -852,17 +1157,28 @@ class BaseSelectionMonitor(QObject):
                 return
             self._scheduled_revision = revision
             self._force_emit = self._force_emit or force_emit
-            delay = max(70, int(self.settings.get("popup_delay_ms", 0)))
+            configured = int(self.settings.get("popup_delay_ms", 0))
+            if self.settings.get("adaptive_delay_enabled", True):
+                configured = max(
+                    configured,
+                    int(self.settings.get("adaptive_delay_min_ms", 55)),
+                )
+            delay = max(45, configured)
+            if is_wayland():
+                # PRIMARY may update several times during one drag. Wait for a
+                # short stable edge, and coalesce follow-up fragments instead
+                # of moving/rebuilding an already visible toolbar repeatedly.
+                delay = max(delay, 150)
+                if time.monotonic() - self._last_emit_at < 0.5:
+                    delay = max(delay, 180)
             self.timer_debounce.start(delay)
 
     def _selection_event(self, *args):
+        if self.secondary_interaction_active():
+            logger.debug("Evento de selección ignorado durante clic secundario")
+            return
         if time.monotonic() < self._suppress_events_until:
             logger.debug("Evento de selección propio ignorado")
-            return
-        if self._secondary_button_pressed():
-            self.suppress_events(500)
-            self._next_revision()
-            logger.debug("Evento de selección ignorado durante clic secundario")
             return
         # Wayland notifications may repeat for the same PRIMARY payload when a
         # context menu opens. A changed payload is sufficient to prove selection.
@@ -876,7 +1192,7 @@ class BaseSelectionMonitor(QObject):
         except Exception:
             pass
         state = self._pointer.state()
-        return bool(state is not None and state[2] & 0x400)
+        return bool(state is not None and state[2] & X11Pointer.SECONDARY_MASK)
 
     def _primary_button_pressed(self):
         try:
@@ -885,7 +1201,24 @@ class BaseSelectionMonitor(QObject):
         except Exception:
             pass
         state = self._pointer.state()
-        return bool(state is not None and state[2] & 0x100)
+        return bool(state is not None and state[2] & X11Pointer.PRIMARY_MASK)
+
+    def suppress_secondary_interaction(self, milliseconds=900):
+        """Cancel pending selections while the desktop owns a context menu."""
+        self._secondary_guard_until = max(
+            self._secondary_guard_until,
+            time.monotonic() + (milliseconds / 1000),
+        )
+        self.suppress_events(milliseconds)
+        self._force_emit = False
+        self._next_revision()
+        self.timer_debounce.stop()
+
+    def secondary_interaction_active(self):
+        if self._secondary_button_pressed():
+            self.suppress_secondary_interaction()
+            return True
+        return time.monotonic() < self._secondary_guard_until
 
     def suppress_events(self, milliseconds=400):
         self._suppress_events_until = max(
@@ -894,16 +1227,13 @@ class BaseSelectionMonitor(QObject):
         )
 
     def _read_selection_text(self):
-        return ""
+        raise NotImplementedError("Selection monitors must provide a text backend")
 
     def _debounce_expired(self):
         revision = self._scheduled_revision
         if revision != self._revision:
             return
-        if self._secondary_button_pressed():
-            self._force_emit = False
-            self.suppress_events(500)
-            self._next_revision()
+        if self.secondary_interaction_active():
             logger.debug("Lectura de selección cancelada por clic secundario")
             return
         if self._primary_button_pressed():
@@ -923,7 +1253,7 @@ class BaseSelectionMonitor(QObject):
         self._force_emit = False
         if not text:
             if self._last_text:
-                logger.info("Seleccion primaria vacia; ocultando popup")
+                logger.info("Seleccion primaria vacia detectada")
             self._last_text = ""
             self.selection_cleared.emit()
             return True
@@ -1138,10 +1468,7 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
         revision = self._scheduled_revision
         if revision != self._revision:
             return
-        if self._secondary_button_pressed():
-            self._force_emit = False
-            self.suppress_events(500)
-            self._next_revision()
+        if self.secondary_interaction_active():
             return
         if self._primary_button_pressed():
             self.timer_debounce.start(45)
@@ -1383,7 +1710,7 @@ class ActionPalette(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 11, 12, 12)
         layout.setSpacing(8)
-        self.title = QLabel("Acciones", self)
+        self.title = QLabel("Más acciones", self)
         self.title.setObjectName("paletteTitle")
         self.subtitle = QLabel("", self)
         self.subtitle.setObjectName("paletteSubtitle")
@@ -1484,7 +1811,7 @@ class ActionPalette(QWidget):
     def open_for(self, actions, origin, settings, application=""):
         self._actions = list(actions)
         self.subtitle.setText(
-            f"{len(self._actions)} disponibles  ·  Enter para ejecutar  ·  Esc para cerrar"
+            f"{len(self._actions)} no fijadas  ·  Enter para ejecutar  ·  Esc para cerrar"
         )
         self._application = str(application or "").strip()
         self.suppress_app.setVisible(bool(self._application))
@@ -1580,6 +1907,153 @@ class ActionPalette(QWidget):
         super().hideEvent(event)
 
 
+class InformationPopup(QWidget):
+    """Independent result surface for calculations, counts and diagnostics."""
+
+    def __init__(self):
+        super().__init__(
+            None,
+            Qt.Tool
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint,
+        )
+        self.setObjectName("textpikInformationPopup")
+        self.setWindowTitle("TextPik · Resultado")
+        self.setAccessibleName("Resultado de TextPik")
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self._surface = QColor("#1c1c20")
+        self._border = QColor("#3f3f46")
+        self._content = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(9)
+        self.title = QLabel(self)
+        self.title.setObjectName("informationTitle")
+        self.title.setAccessibleName("Tipo de resultado")
+        self.content = QTextEdit(self)
+        self.content.setObjectName("informationContent")
+        self.content.setReadOnly(True)
+        self.content.setAcceptRichText(False)
+        self.content.setFrameStyle(0)
+        self.content.setAccessibleName("Contenido del resultado")
+        self.copy_button = QPushButton("Copiar resultado", self)
+        self.copy_button.setObjectName("informationPrimary")
+        self.close_button = QPushButton("Cerrar", self)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(7)
+        footer.addStretch(1)
+        footer.addWidget(self.copy_button)
+        footer.addWidget(self.close_button)
+        layout.addWidget(self.title)
+        layout.addWidget(self.content, 1)
+        layout.addLayout(footer)
+        self.copy_button.clicked.connect(self._copy_result)
+        self.close_button.clicked.connect(self.hide)
+
+        self.auto_hide_timer = QTimer(self)
+        self.auto_hide_timer.setSingleShot(True)
+        self.auto_hide_timer.timeout.connect(self.hide)
+
+    def apply_theme(self, settings):
+        dark = color_luminance(settings["popup_background_color"]) < 0.5
+        surface, foreground = ("#1c1c20", "#fafafa") if dark else ("#ffffff", "#18181b")
+        muted = "#a1a1aa" if dark else "#71717a"
+        field = "#27272c" if dark else "#f4f4f5"
+        hover = "#34343b" if dark else "#e8e8eb"
+        self._surface = QColor(surface)
+        self._border = QColor(settings["popup_border_color"])
+        self.setWindowOpacity(settings.get("popup_opacity", 0.99))
+        self.setStyleSheet(
+            f"""
+            QWidget#textpikInformationPopup {{ background: transparent; }}
+            QLabel#informationTitle {{ color: {foreground}; font-size: 14px;
+                font-weight: 700; padding: 1px 2px; }}
+            QTextEdit#informationContent {{ background: {field}; color: {foreground};
+                border: none; border-radius: 10px; padding: 9px 10px;
+                selection-background-color: {muted}; }}
+            QPushButton {{ background: {field}; color: {foreground}; border: none;
+                border-radius: 9px; padding: 7px 12px; min-height: 18px; }}
+            QPushButton:hover {{ background: {hover}; }}
+            QPushButton#informationPrimary {{ font-weight: 650; }}
+            QScrollBar:vertical {{ background: transparent; width: 7px; margin: 3px 0; }}
+            QScrollBar::handle:vertical {{ background: {muted}; min-height: 24px;
+                border-radius: 3px; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            """
+        )
+
+    def show_result(self, title, value, detail, settings, anchor_rect):
+        self.apply_theme(settings)
+        value = str(value)
+        detail = str(detail or "")
+        self._content = value if not detail else f"{value}\n\n{detail}"
+        self.title.setText(str(title))
+        self.content.setPlainText(self._content)
+        content_height = min(280, max(96, 72 + len(self._content) // 3))
+        self.resize(420, content_height + 82)
+
+        if anchor_rect is not None:
+            ax = anchor_rect.x() + anchor_rect.width() // 2
+            ay = anchor_rect.y() + anchor_rect.height()
+            avoid = (
+                anchor_rect.x(),
+                anchor_rect.y(),
+                anchor_rect.width(),
+                anchor_rect.height(),
+            )
+        else:
+            cursor = QCursor.pos()
+            ax, ay, avoid = cursor.x(), cursor.y(), None
+        screen = QApplication.screenAt(QPoint(ax, ay)) or QApplication.primaryScreen()
+        if screen:
+            area = screen.availableGeometry()
+            x, y = place_popup(
+                (ax, ay),
+                (self.width(), self.height()),
+                (area.x(), area.y(), area.width(), area.height()),
+                avoid,
+                8,
+                preference="below",
+            )
+            self.move(x, y)
+        self.show()
+        self.raise_()
+        self.auto_hide_timer.start(30_000)
+
+    def _copy_result(self):
+        QApplication.clipboard().setText(self._content)
+        self.copy_button.setText("Copiado")
+        QTimer.singleShot(1200, lambda: self.copy_button.setText("Copiar resultado"))
+
+    def enterEvent(self, event):
+        self.auto_hide_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.auto_hide_timer.start(8_000)
+        super().leaveEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.hide()
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 14, 14)
+        painter.fillPath(path, self._surface)
+        painter.setPen(QPen(self._border, 1))
+        painter.drawPath(path)
+        super().paintEvent(event)
+
+
 class PopupWindow(QWidget):
     action_triggered = Signal(str, str)
     pin_requested = Signal(str)
@@ -1599,7 +2073,12 @@ class PopupWindow(QWidget):
             "Acciones disponibles para el texto seleccionado"
         )
         self.setWindowIcon(QIcon())
-        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            Qt.Tool
+            | Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.WindowDoesNotAcceptFocus
+        )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
@@ -1607,20 +2086,32 @@ class PopupWindow(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self._actions_key = None
         self.visible_actions = []
+        self.palette_actions = []
         self._action_buttons = []
         self._more_button = None
         self._keyboard_index = -1
         self._more_menu_open = False
+        self._action_pressed = False
+        self._pointer_inside = False
         self._application = ""
+        self._selection_text = ""
         self._last_stable_position = None
         self._last_position_at = 0.0
+        self._last_pointer_sample = None
+        self.pointer_anchor_reliable = False
+        self.keyboard_mode = False
         self.palette = ActionPalette(self)
         self.palette.action_triggered.connect(self._on_click)
         self.palette.pin_requested.connect(self.pin_requested.emit)
         self.palette.suppress_app_requested.connect(self.suppress_app_requested.emit)
         self.palette.closed.connect(self._on_more_menu_closed)
+        self.result_popup = None
 
-        self.buttons_layout = QHBoxLayout(self)
+        self.root_layout = QVBoxLayout(self)
+        self.root_layout.setContentsMargins(0, 0, 0, 0)
+        self.root_layout.setSpacing(0)
+        self.buttons_layout = QGridLayout()
+        self.root_layout.addLayout(self.buttons_layout)
         self.apply_settings(self.settings)
         self.set_actions(self.actions)
 
@@ -1695,30 +2186,90 @@ class PopupWindow(QWidget):
             self._more_button.update()
         self.adjustSize()
 
-    def set_actions(self, actions, *, compact=False):
+    def show_inline_result(self, title, value, detail=""):
+        if self.result_popup is None:
+            self.result_popup = InformationPopup()
+        self.result_popup.show_result(
+            title,
+            value,
+            detail,
+            self.settings,
+            self.geometry(),
+        )
+
+    def clear_inline_result(self):
+        if self.result_popup is not None:
+            self.result_popup.hide()
+
+    def set_actions(self, actions, *, compact=False, palette_actions=None):
+        actions = list(actions)
+
+        def action_identity(action):
+            action_id = str(action.get("id", "")).strip()
+            if action_id:
+                return ("id", action_id)
+            return (
+                "action",
+                str(action.get("cmd", "")),
+                str(action.get("name", "")),
+            )
+
+        catalog = []
+        catalog_ids = set()
+        catalog_source = actions if palette_actions is None else list(palette_actions)
+        # Direct actions are always part of the catalog, even for callers that
+        # supply a partial or stale palette snapshot.
+        for action in (*catalog_source, *actions):
+            identity = action_identity(action)
+            if identity in catalog_ids:
+                continue
+            catalog_ids.add(identity)
+            catalog.append(action)
+
+        def action_signature(action):
+            return (
+                action.get("id", ""),
+                action["name"],
+                action["icon"],
+                action["cmd"],
+                action.get("category", ""),
+                bool(action.get("pinned", False)),
+                tuple(action.get("context", [])),
+                tuple(sorted(action.get("variants", {}).items())),
+            )
+
         screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         available_width = screen.availableGeometry().width() if screen else 1920
+        show_all = self.settings.get("show_all_popup_actions", False)
+        requested = (
+            len(actions)
+            if show_all
+            else self.settings.get("max_popup_actions", 8)
+        )
+        compact_limit = None
+        if compact and self.settings.get("adaptive_popup", True) and not show_all:
+            candidate = self.settings.get("popup_compact_actions", 8)
+            if candidate < requested:
+                compact_limit = candidate
         actions_key = (
-            self.settings.get("max_popup_actions", 8),
-            self.settings.get("show_all_popup_actions", False),
+            requested,
+            compact_limit,
             self.settings.get("show_numeric_badges", False),
-            compact,
+            self.settings.get("popup_allow_two_rows", True),
+            self.settings.get("popup_icon_size", 17),
+            self.settings.get("popup_button_padding", 4),
+            self.settings.get("popup_spacing", 2),
             available_width,
-            tuple(
-                (
-                    action["name"],
-                    action["icon"],
-                    action["cmd"],
-                    tuple(action.get("context", [])),
-                )
-                for action in actions
-            ),
+            tuple(action_signature(action) for action in actions),
+            tuple(action_signature(action) for action in catalog),
         )
         if actions_key == self._actions_key:
             return
 
+        self.setUpdatesEnabled(False)
         self._actions_key = actions_key
         self.actions = actions
+        self.palette_actions = catalog
         self._action_buttons = []
         self._more_button = None
         self._keyboard_index = -1
@@ -1737,25 +2288,27 @@ class PopupWindow(QWidget):
         screen_capacity = max(
             4, (available_width - horizontal_margins - 32 + spacing) // slot_width
         )
-        requested = (
-            len(self.actions)
-            if self.settings.get("show_all_popup_actions", False)
-            else self.settings.get("max_popup_actions", 8)
+        composition = plan_popup_composition(
+            len(self.actions),
+            requested=requested,
+            row_capacity=screen_capacity,
+            compact_limit=compact_limit,
+            allow_two_rows=self.settings.get("popup_allow_two_rows", True),
+            catalog_count=len(self.palette_actions),
         )
-        if (
-            compact
-            and self.settings.get("adaptive_popup", True)
-            and not self.settings.get("show_all_popup_actions", False)
-        ):
-            requested = min(
-                requested,
-                self.settings.get("popup_compact_actions", 4),
-            )
-        direct_count = min(len(self.actions), requested, screen_capacity)
-        has_overflow = len(self.actions) > direct_count
-        if has_overflow and direct_count >= screen_capacity:
-            direct_count = max(3, screen_capacity - 1)
+        direct_count = composition.direct_count
         self.visible_actions = self.actions[:direct_count]
+        direct_ids = {action_identity(action) for action in self.visible_actions}
+        overflow_actions = [
+            action
+            for action in self.palette_actions
+            if action_identity(action) not in direct_ids
+        ]
+        has_overflow = bool(overflow_actions)
+
+        def add_to_grid(widget, slot):
+            row, column = divmod(slot, composition.columns)
+            self.buttons_layout.addWidget(widget, row, column)
 
         variant = getattr(self, "icon_variant", None)
         for i, action in enumerate(self.visible_actions):
@@ -1775,7 +2328,8 @@ class PopupWindow(QWidget):
             else:
                 button.setIcon(icon)
             shortcut = f"{i + 1}: " if i < 9 else ""
-            button.setToolTip(f"{shortcut}{action['name']}")
+            variant_hint = " · Alt: variante" if action.get("variants") else ""
+            button.setToolTip(f"{shortcut}{action['name']}{variant_hint}")
             button.setAccessibleName(action["name"])
             button.setAccessibleDescription(
                 f"Ejecutar {action['name']} sobre el texto seleccionado"
@@ -1785,11 +2339,12 @@ class PopupWindow(QWidget):
             button.setFlat(True)
             button.setFocusPolicy(Qt.NoFocus)
             button.setCursor(Qt.PointingHandCursor)
-            command = action["cmd"]
             button.clicked.connect(
-                lambda checked=False, cmd=command: self._on_click(cmd)
+                lambda checked=False, action=action: self._on_click(action)
             )
-            self.buttons_layout.addWidget(button)
+            button.pressed.connect(self._begin_action_interaction)
+            button.released.connect(self._end_action_interaction)
+            add_to_grid(button, i)
             self._action_buttons.append(button)
             if self.settings.get("show_numeric_badges", False) and i < 9:
                 badge = QLabel(str(i + 1), button)
@@ -1804,29 +2359,45 @@ class PopupWindow(QWidget):
                 badge.show()
 
         if has_overflow:
-            self.buttons_layout.addSpacing(2)
             more_button = MoreActionsButton(self.icon_color)
             self._more_button = more_button
             more_button.setObjectName("moreActions")
-            more_button.setToolTip(f"Más acciones ({len(self.actions) - direct_count})")
+            more_button.setToolTip(f"Más acciones ({len(overflow_actions)})")
             more_button.setAccessibleName("Más acciones")
             more_button.setAccessibleDescription(
-                f"Mostrar {len(self.actions) - direct_count} acciones adicionales"
+                f"Mostrar {len(overflow_actions)} acciones no fijadas en la barra"
             )
             more_button.setFixedSize(button_size, button_size)
             more_button.setFlat(True)
             more_button.setFocusPolicy(Qt.NoFocus)
             more_button.setCursor(Qt.PointingHandCursor)
-            palette_actions = list(self.actions[direct_count:])
             more_button.clicked.connect(
-                lambda checked=False, values=palette_actions, button=more_button: self._open_palette(
+                lambda checked=False, values=overflow_actions, button=more_button: self._open_palette(
                     values, button
                 )
             )
-            self.buttons_layout.addWidget(more_button)
+            more_button.pressed.connect(self._begin_action_interaction)
+            more_button.released.connect(self._end_action_interaction)
+            add_to_grid(more_button, direct_count)
 
+        self.buttons_layout.invalidate()
+        self.root_layout.invalidate()
         self.buttons_layout.activate()
-        self.adjustSize()
+        self.root_layout.activate()
+        rows = max(1, composition.rows)
+        columns = max(1, composition.columns)
+        left, top, right, bottom = self.buttons_layout.getContentsMargins()
+        stable_size = QSize(
+            left + right + columns * button_size + max(0, columns - 1) * spacing,
+            top + bottom + rows * button_size + max(0, rows - 1) * spacing,
+        )
+        # A persistent minimum prevents Qt Wayland from committing the transient
+        # empty-layout size (usually 10x8) while buttons are being replaced.
+        self.setMinimumSize(stable_size)
+        target_size = self.sizeHint().expandedTo(stable_size)
+        self.resize(target_size)
+        self.setUpdatesEnabled(True)
+        self.update()
 
     def paintEvent(self, event):
         radius = self.settings.get("popup_border_radius", 16)
@@ -1852,9 +2423,24 @@ class PopupWindow(QWidget):
     def _on_more_menu_opened(self):
         self._more_menu_open = True
 
+    def _begin_action_interaction(self):
+        self._action_pressed = True
+        self.interaction_started.emit()
+
+    def _end_action_interaction(self):
+        self._action_pressed = False
+        self.interaction_finished.emit()
+
     def _on_more_menu_closed(self):
+        was_open = self._more_menu_open
         self._more_menu_open = False
         self.interaction_finished.emit()
+        if was_open and self.isVisible():
+            # Qt.Popup closes the overflow palette automatically on an outside
+            # click. Close its owning toolbar in the same event so it cannot
+            # fall back to waiting for the eight-second lifetime.
+            logger.info("Más acciones cerrado; ocultando barra propietaria")
+            self.hide()
 
     def _open_palette(self, actions, button):
         self._more_menu_open = True
@@ -1863,9 +2449,32 @@ class PopupWindow(QWidget):
 
     def set_context(self, context):
         self._application = str(getattr(context, "application", "") or "").strip()
+        self._selection_text = str(getattr(context, "text", "") or "")
 
-    def _on_click(self, cmd):
-        text = self.monitor.get_last_text() if self.monitor else ""
+    def set_keyboard_mode(self, enabled):
+        enabled = bool(enabled)
+        self.keyboard_mode = enabled
+        does_not_accept_focus = bool(
+            self.windowFlags() & Qt.WindowDoesNotAcceptFocus
+        )
+        desired = not enabled
+        if does_not_accept_focus != desired:
+            self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, desired)
+
+    def _on_click(self, action):
+        if isinstance(action, dict):
+            modifiers = QApplication.keyboardModifiers()
+            variant = modifier_key(
+                shift=bool(modifiers & Qt.ShiftModifier),
+                control=bool(modifiers & Qt.ControlModifier),
+                alt=bool(modifiers & Qt.AltModifier),
+            )
+            cmd = resolve_action_command(action, variant)
+        else:
+            cmd = str(action)
+        text = self._selection_text or (
+            self.monitor.get_last_text() if self.monitor else ""
+        )
         self.hide()
         self.action_triggered.emit(cmd, text)
 
@@ -1874,11 +2483,16 @@ class PopupWindow(QWidget):
         super().hideEvent(event)
 
     def focusOutEvent(self, event):
-        QTimer.singleShot(0, self.hide_if_focus_outside)
+        if self.keyboard_mode:
+            QTimer.singleShot(0, self.hide_if_focus_outside)
         super().focusOutEvent(event)
 
     def hide_if_focus_outside(self):
-        if self.settings.get("sticky_popup", False) or self._more_menu_open:
+        if (
+            not self.keyboard_mode
+            or self.settings.get("sticky_popup", False)
+            or self._more_menu_open
+        ):
             return
         focus_widget = QApplication.focusWidget()
         if focus_widget is self or (
@@ -1892,7 +2506,18 @@ class PopupWindow(QWidget):
         return bool(self.settings.get("sticky_popup", False))
 
     def is_interacting(self):
-        return self.is_sticky() or self._more_menu_open
+        return self.is_sticky() or self._more_menu_open or self._action_pressed
+
+    def pointer_inside(self):
+        return self._pointer_inside or self.underMouse()
+
+    def enterEvent(self, event):
+        self._pointer_inside = True
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._pointer_inside = False
+        super().leaveEvent(event)
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -1906,12 +2531,12 @@ class PopupWindow(QWidget):
             return
         if key in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
             if 0 <= self._keyboard_index < len(self.visible_actions):
-                self._on_click(self.visible_actions[self._keyboard_index]["cmd"])
+                self._on_click(self.visible_actions[self._keyboard_index])
                 return
         if Qt.Key_1 <= key <= Qt.Key_9:
             idx = key - Qt.Key_1
             if idx < len(self.visible_actions):
-                self._on_click(self.visible_actions[idx]["cmd"])
+                self._on_click(self.visible_actions[idx])
                 return
         if key == Qt.Key_Escape:
             self.hide()
@@ -1930,9 +2555,10 @@ class PopupWindow(QWidget):
             cx, cy, cursor_reliable = anchor.x, anchor.y, anchor.confidence >= 0.65
         else:
             cx, cy, cursor_reliable = get_cursor_pos()
+        self.pointer_anchor_reliable = bool(cursor_reliable)
         screen = QApplication.screenAt(QPoint(cx, cy)) or QApplication.primaryScreen()
         self.adjustSize()
-        size = self.sizeHint()
+        size = self.sizeHint().expandedTo(self.minimumSize())
         self.resize(size)
         if screen:
             geo = screen.availableGeometry()
@@ -1940,12 +2566,21 @@ class PopupWindow(QWidget):
             height = size.height()
 
             if cursor_reliable:
+                now = time.monotonic()
+                pointer_direction = None
+                if self._last_pointer_sample is not None:
+                    px, py, sampled_at = self._last_pointer_sample
+                    if now - sampled_at <= 0.8:
+                        pointer_direction = (cx - px, cy - py)
+                self._last_pointer_sample = (cx, cy, now)
                 x, y = place_popup(
                     (cx, cy),
                     (width, height),
                     (geo.x(), geo.y(), geo.width(), geo.height()),
                     avoid_rect,
                     self.settings.get("popup_cursor_gap", 6),
+                    pointer_direction,
+                    self.settings.get("popup_position_preference", "auto"),
                 )
             else:
                 if self.settings.get("popup_wayland_fallback_horizontal") == "cursor":
@@ -2023,6 +2658,8 @@ def validate_actions(actions):
                 "xdg-open 'https://www.google.com/maps",
                 "xdg-open 'https://chatgpt.com/",
                 "xdg-open 'https://chat.deepseek.com/",
+                "xdg-open 'https://claude.ai/",
+                "xdg-open 'https://gemini.google.com/",
                 "xdg-open 'https://duckduckgo.com/",
             )
         ):
@@ -2073,12 +2710,20 @@ def run_cli_action(args):
             command = action["cmd"]
             break
 
-    if command in {"copy", "paste", "terminal", "print", "ollama"}:
+    if command in {"copy", "cut", "paste", "terminal", "print", "ollama"}:
         print(
             f"La accion '{command}' requiere la interfaz grafica de textpik.",
             file=sys.stderr,
         )
         return 2
+
+    if command in TRANSFORMS:
+        try:
+            print(transform_text(command, text))
+            return 0
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
 
     if command == "open-url":
         url = normalize_url(text)
@@ -2315,6 +2960,251 @@ class ContextProfileDialog(QDialog):
         super().accept()
 
 
+class AutomationEditDialog(QDialog):
+    """Compact visual editor for shell-free declarative automations."""
+
+    OPERATIONS = (
+        "uppercase", "lowercase", "capitalize", "remove-breaks",
+        "replace", "prefix", "suffix",
+    )
+
+    def __init__(self, flow=None, parent=None):
+        super().__init__(parent)
+        flow = dict(flow or {})
+        self.setWindowTitle("Editar automatización" if flow else "Nueva automatización")
+        self.setMinimumSize(620, 590)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name_edit = QLineEdit(str(flow.get("name", "")), self)
+        form.addRow("Nombre", self.name_edit)
+        conditions = dict(flow.get("conditions", {}))
+        self.application_edit = QLineEdit(str(conditions.get("application", "")), self)
+        self.application_edit.setPlaceholderText("firefox, libreoffice, terminal…")
+        form.addRow("Aplicación contiene", self.application_edit)
+        self.types_edit = QLineEdit(", ".join(conditions.get("text_types", [])), self)
+        self.types_edit.setPlaceholderText("text, url, json, error…")
+        form.addRow("Tipos de texto", self.types_edit)
+        self.regex_edit = QLineEdit(str(conditions.get("regex", "")), self)
+        self.regex_edit.setPlaceholderText("Opcional · expresión regular de hasta 256 caracteres")
+        form.addRow("Patrón", self.regex_edit)
+        self.editable_combo = QComboBox(self)
+        self.editable_combo.addItem("Cualquier campo", None)
+        self.editable_combo.addItem("Solo editable", True)
+        self.editable_combo.addItem("Solo lectura", False)
+        editable = conditions.get("editable")
+        self.editable_combo.setCurrentIndex(0 if editable is None else (1 if editable else 2))
+        form.addRow("Edición", self.editable_combo)
+        layout.addLayout(form)
+
+        template_row = QHBoxLayout()
+        self.template_combo = QComboBox(self)
+        self.template_combo.addItem("Elegir plantilla…", "")
+        for template in AUTOMATION_TEMPLATES:
+            self.template_combo.addItem(template["name"], template["id"])
+        apply_template = QPushButton("Aplicar", self)
+        apply_template.clicked.connect(self._apply_template)
+        template_row.addWidget(QLabel("Plantilla", self))
+        template_row.addWidget(self.template_combo, 1)
+        template_row.addWidget(apply_template)
+        layout.addLayout(template_row)
+
+        self.steps_list = QListWidget(self)
+        self.steps_list.setAlternatingRowColors(True)
+        self.steps_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.steps_list.setDefaultDropAction(Qt.MoveAction)
+        self.steps_list.setDragEnabled(True)
+        self.steps_list.setAcceptDrops(True)
+        self.steps_list.setDropIndicatorShown(True)
+        for step in flow.get("steps", []):
+            self._append_step(dict(step))
+        layout.addWidget(self.steps_list, 1)
+
+        builder = QGridLayout()
+        self.operation_combo = QComboBox(self)
+        self.operation_combo.addItems(self.OPERATIONS)
+        self.source_edit = QLineEdit(self)
+        self.source_edit.setPlaceholderText("Texto de origen para replace")
+        self.value_edit = QLineEdit(self)
+        self.value_edit.setPlaceholderText("Valor, prefijo, sufijo o reemplazo")
+        add_step = QPushButton("Agregar paso", self)
+        add_step.clicked.connect(self._add_step)
+        remove_step = QPushButton("Eliminar paso", self)
+        remove_step.clicked.connect(self._remove_step)
+        move_up = QPushButton("↑", self)
+        move_up.setToolTip("Mover paso hacia arriba")
+        move_up.clicked.connect(lambda: self._move_step(-1))
+        move_down = QPushButton("↓", self)
+        move_down.setToolTip("Mover paso hacia abajo")
+        move_down.clicked.connect(lambda: self._move_step(1))
+        builder.addWidget(self.operation_combo, 0, 0)
+        builder.addWidget(self.source_edit, 0, 1)
+        builder.addWidget(self.value_edit, 1, 1)
+        builder.addWidget(add_step, 0, 2)
+        builder.addWidget(remove_step, 1, 2)
+        builder.addWidget(move_up, 0, 3)
+        builder.addWidget(move_down, 1, 3)
+        layout.addLayout(builder)
+        note = QLabel(
+            "Las automatizaciones son locales, transaccionales y no ejecutan shell. "
+            "El resultado se previsualiza antes de reemplazar la selección.", self,
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedText")
+        layout.addWidget(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.identifier = str(flow.get("id", ""))
+
+    def _apply_template(self):
+        identifier = self.template_combo.currentData()
+        if not identifier:
+            return
+        self.steps_list.clear()
+        for step in automation_template(identifier):
+            self._append_step(step)
+        if not self.name_edit.text().strip():
+            self.name_edit.setText(self.template_combo.currentText())
+
+    def _move_step(self, offset):
+        row = self.steps_list.currentRow()
+        destination = row + int(offset)
+        if row < 0 or not 0 <= destination < self.steps_list.count():
+            return
+        item = self.steps_list.takeItem(row)
+        self.steps_list.insertItem(destination, item)
+        self.steps_list.setCurrentRow(destination)
+
+    def _append_step(self, step):
+        operation = str(step.get("operation", ""))
+        detail = ""
+        if operation == "replace":
+            detail = f" · {step.get('source', '')!r} → {step.get('target', '')!r}"
+        elif operation in {"prefix", "suffix"}:
+            detail = f" · {step.get('value', '')!r}"
+        item = QListWidgetItem(f"{operation}{detail}", self.steps_list)
+        item.setData(Qt.UserRole, step)
+
+    def _add_step(self):
+        operation = self.operation_combo.currentText()
+        step = {"operation": operation}
+        if operation == "replace":
+            if not self.source_edit.text():
+                QMessageBox.warning(self, "Paso incompleto", "Indica el texto de origen.")
+                return
+            step.update(source=self.source_edit.text(), target=self.value_edit.text())
+        elif operation in {"prefix", "suffix"}:
+            step["value"] = self.value_edit.text()
+        self._append_step(step)
+        self.source_edit.clear()
+        self.value_edit.clear()
+
+    def _remove_step(self):
+        row = self.steps_list.currentRow()
+        if row >= 0:
+            self.steps_list.takeItem(row)
+
+    def get_flow(self):
+        name = self.name_edit.text().strip()
+        types = list(dict.fromkeys(
+            value.strip().casefold()
+            for value in self.types_edit.text().split(",")
+            if value.strip()
+        ))
+        conditions = {"text_types": types or ["text"]}
+        if self.application_edit.text().strip():
+            conditions["application"] = self.application_edit.text().strip()
+        if self.regex_edit.text().strip():
+            conditions["regex"] = self.regex_edit.text().strip()[:256]
+        editable = self.editable_combo.currentData()
+        if editable is not None:
+            conditions["editable"] = editable
+        steps = [
+            dict(self.steps_list.item(index).data(Qt.UserRole))
+            for index in range(self.steps_list.count())
+        ]
+        identifier = self.identifier or stable_action_id(name, json.dumps(steps, sort_keys=True))[:80]
+        return {
+            "id": identifier,
+            "name": name[:120],
+            "enabled": True,
+            "conditions": conditions,
+            "steps": steps,
+        }
+
+    def accept(self):
+        flow = self.get_flow()
+        if not flow["name"] or not flow["steps"]:
+            QMessageBox.warning(self, "Automatización incompleta", "Indica un nombre y al menos un paso.")
+            return
+        try:
+            preview_automation(flow, "Texto de prueba")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Automatización inválida", str(exc))
+            return
+        super().accept()
+
+
+class TorrentServerDialog(QDialog):
+    """Small credential editor for a user-owned torrent server."""
+
+    def __init__(self, server=None, parent=None):
+        super().__init__(parent)
+        server = server or {}
+        self.setWindowTitle("Servidor torrent")
+        self.setMinimumWidth(430)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name = QLineEdit(str(server.get("name", "")), self)
+        self.kind = QComboBox(self)
+        self.kind.addItem("qBittorrent Web API", "qbittorrent")
+        self.kind.addItem("Transmission RPC", "transmission")
+        index = self.kind.findData(server.get("type", "qbittorrent"))
+        self.kind.setCurrentIndex(max(0, index))
+        self.endpoint = QLineEdit(str(server.get("endpoint", "")), self)
+        self.endpoint.setPlaceholderText("http://servidor.local:8080")
+        self.username = QLineEdit(str(server.get("username", "")), self)
+        self.password = QLineEdit(str(server.get("password", "")), self)
+        self.password.setEchoMode(QLineEdit.Password)
+        form.addRow("Nombre", self.name)
+        form.addRow("Tipo", self.kind)
+        form.addRow("Dirección", self.endpoint)
+        form.addRow("Usuario", self.username)
+        form.addRow("Contraseña", self.password)
+        layout.addLayout(form)
+        note = QLabel(
+            "La dirección debe usar HTTP o HTTPS. Las credenciales se guardan "
+            "en el archivo privado de configuración del usuario.",
+            self,
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons.accepted.connect(self._accept_validated)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _accept_validated(self):
+        from urllib.parse import urlsplit
+
+        endpoint = self.endpoint.text().strip()
+        parsed = urlsplit(endpoint)
+        if not self.name.text().strip() or parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            QMessageBox.warning(self, "Servidor inválido", "Indica un nombre y una dirección HTTP(S) válida.")
+            return
+        self.accept()
+
+    def value(self):
+        return {
+            "name": self.name.text().strip(),
+            "type": self.kind.currentData(),
+            "endpoint": self.endpoint.text().strip().rstrip("/"),
+            "username": self.username.text(),
+            "password": self.password.text(),
+        }
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings, actions, controller, parent=None):
         super().__init__(parent)
@@ -2325,6 +3215,9 @@ class SettingsDialog(QDialog):
         self.settings = normalize_settings(settings)
         self.actions = list(actions)
         self.context_profiles = list(self.settings.get("context_profiles", []))
+        self.automations = [
+            dict(flow) for flow in getattr(controller, "automations", [])
+        ]
         self._color_swatches = {}
 
         layout = QVBoxLayout(self)
@@ -2415,18 +3308,38 @@ class SettingsDialog(QDialog):
         )
         self.popup_delay.setSuffix(" ms")
         beh_form.addRow("Retardo", self.popup_delay)
+        self.adaptive_delay = QCheckBox(
+            "Ajustar el retardo según aplicación y tipo de selección", self
+        )
+        self.adaptive_delay.setChecked(
+            bool(self.settings.get("adaptive_delay_enabled", True))
+        )
+        beh_form.addRow("Retardo inteligente", self.adaptive_delay)
         self.auto_hide = self._spin(
-            0, 30000, int(self.settings.get("popup_auto_hide_ms", 5000))
+            0, 30000, int(self.settings.get("popup_auto_hide_ms", 8000))
         )
         self.auto_hide.setSingleStep(500)
         self.auto_hide.setSuffix(" ms")
         self.auto_hide.setSpecialValueText("Desactivado")
         beh_form.addRow("Ocultar si no se usa", self.auto_hide)
         self.cursor_gap = self._spin(
-            2, 24, int(self.settings.get("popup_cursor_gap", 6))
+            2, 24, int(self.settings.get("popup_cursor_gap", 3))
         )
         self.cursor_gap.setSuffix(" px")
-        beh_form.addRow("Distancia a la selección", self.cursor_gap)
+        beh_form.addRow("Separación del cursor", self.cursor_gap)
+        self.position_preference = QComboBox(self)
+        for label, value in (
+            ("Automática", "auto"),
+            ("Preferir arriba", "above"),
+            ("Preferir abajo", "below"),
+            ("Preferir lateral", "side"),
+        ):
+            self.position_preference.addItem(label, value)
+        position_index = self.position_preference.findData(
+            self.settings.get("popup_position_preference", "auto")
+        )
+        self.position_preference.setCurrentIndex(max(0, position_index))
+        beh_form.addRow("Posición", self.position_preference)
         self.sticky_popup = QCheckBox(
             "Mantener popup hasta elegir accion o Escape", self
         )
@@ -2437,8 +3350,19 @@ class SettingsDialog(QDialog):
         )
         self.context_aware.setChecked(bool(self.settings.get("context_aware", True)))
         beh_form.addRow("Contexto inteligente", self.context_aware)
+        self.history_enabled = QCheckBox(
+            "Guardar historial local limitado (desactivado por defecto)", self
+        )
+        self.history_enabled.setChecked(
+            bool(self.settings.get("history_enabled", False))
+        )
+        beh_form.addRow("Historial privado", self.history_enabled)
+        self.history_max_items = self._spin(
+            10, 1000, int(self.settings.get("history_max_items", 100))
+        )
+        beh_form.addRow("Máximo del historial", self.history_max_items)
         self.adaptive_popup = QCheckBox(
-            "Reducir la barra cuando falte contexto fiable", self
+            "Adaptar la barra cuando falte contexto fiable", self
         )
         self.adaptive_popup.setChecked(
             bool(self.settings.get("adaptive_popup", True))
@@ -2455,9 +3379,12 @@ class SettingsDialog(QDialog):
         self.popup_full_confidence.setSuffix(" %")
         beh_form.addRow("Confianza para barra completa", self.popup_full_confidence)
         self.popup_compact_actions = self._spin(
-            3, 8, int(self.settings.get("popup_compact_actions", 4))
+            8, 40, int(self.settings.get("popup_compact_actions", 8))
         )
-        beh_form.addRow("Acciones en modo compacto", self.popup_compact_actions)
+        self.popup_compact_actions.setSuffix(" iconos")
+        self.popup_compact_actions.setToolTip(
+            "Nunca se mostrarán menos de 8 acciones directas si están disponibles"
+        )
         self.enable_global_hotkey = QCheckBox("Atajo global Ctrl+Shift+P", self)
         self.enable_global_hotkey.setChecked(
             bool(self.settings.get("enable_global_hotkey", False))
@@ -2663,6 +3590,40 @@ class SettingsDialog(QDialog):
         system_layout.addWidget(integration_note)
         system_layout.addStretch()
 
+        integrations_tab = QWidget()
+        integrations_layout = QVBoxLayout(integrations_tab)
+        torrent_group = QGroupBox("Servidores torrent en la red")
+        torrent_layout = QVBoxLayout(torrent_group)
+        torrent_note = QLabel(
+            "Envía enlaces magnet directamente a Transmission o qBittorrent "
+            "en un NAS, servidor doméstico u otro equipo de tu red.",
+            self,
+        )
+        torrent_note.setWordWrap(True)
+        torrent_layout.addWidget(torrent_note)
+        self.torrent_servers = [dict(item) for item in self.settings.get("torrent_servers", [])]
+        self.torrent_servers_list = QListWidget(self)
+        self.torrent_servers_list.setMinimumHeight(120)
+        self.torrent_servers_list.itemDoubleClicked.connect(
+            lambda _item: self._edit_torrent_server()
+        )
+        torrent_layout.addWidget(self.torrent_servers_list)
+        torrent_buttons = QHBoxLayout()
+        add_torrent_server = QPushButton("Añadir", self)
+        add_torrent_server.clicked.connect(self._add_torrent_server)
+        edit_torrent_server = QPushButton("Editar", self)
+        edit_torrent_server.clicked.connect(self._edit_torrent_server)
+        remove_torrent_server = QPushButton("Eliminar", self)
+        remove_torrent_server.clicked.connect(self._remove_torrent_server)
+        torrent_buttons.addWidget(add_torrent_server)
+        torrent_buttons.addWidget(edit_torrent_server)
+        torrent_buttons.addWidget(remove_torrent_server)
+        torrent_buttons.addStretch()
+        torrent_layout.addLayout(torrent_buttons)
+        integrations_layout.addWidget(torrent_group)
+        integrations_layout.addStretch()
+        self._populate_torrent_servers()
+
         # ── Pestaña 6: Diagnostico ──
         diag_tab = QWidget()
         diag_layout = QVBoxLayout(diag_tab)
@@ -2701,19 +3662,47 @@ class SettingsDialog(QDialog):
         )
         bar_form.addRow("Modo", self.show_all_popup_actions)
         self.max_popup_actions = self._spin(
-            3, 40, int(self.settings.get("max_popup_actions", 8))
+            8, 40, int(self.settings.get("max_popup_actions", 8))
         )
         self.max_popup_actions.setSuffix(" iconos")
+        self.popup_compact_actions.setMaximum(self.max_popup_actions.value())
+        self.max_popup_actions.valueChanged.connect(
+            self.popup_compact_actions.setMaximum
+        )
         self.max_popup_actions.setEnabled(
             not self.show_all_popup_actions.isChecked()
         )
         self.show_all_popup_actions.toggled.connect(
             lambda checked: self.max_popup_actions.setEnabled(not checked)
         )
-        bar_form.addRow("Iconos directos", self.max_popup_actions)
+        self.popup_compact_actions.setEnabled(
+            self.adaptive_popup.isChecked()
+            and not self.show_all_popup_actions.isChecked()
+        )
+        self.show_all_popup_actions.toggled.connect(
+            lambda checked: self.popup_compact_actions.setEnabled(
+                self.adaptive_popup.isChecked() and not checked
+            )
+        )
+        self.adaptive_popup.toggled.connect(
+            lambda checked: self.popup_compact_actions.setEnabled(
+                checked and not self.show_all_popup_actions.isChecked()
+            )
+        )
+        bar_form.addRow("Acciones directas", self.max_popup_actions)
+        bar_form.addRow("Mínimo adaptativo", self.popup_compact_actions)
+        self.popup_allow_two_rows = QCheckBox(
+            "Usar una segunda fila antes de enviar acciones al menú", self
+        )
+        self.popup_allow_two_rows.setChecked(
+            bool(self.settings.get("popup_allow_two_rows", True))
+        )
+        bar_form.addRow("Pantallas estrechas", self.popup_allow_two_rows)
         bar_note = QLabel(
-            "La barra puede crecer hasta el ancho disponible de la pantalla. "
-            "Más acciones contendrá únicamente el excedente real.",
+            "La barra muestra como mínimo 8 acciones cuando están disponibles, "
+            "crece según el límite elegido y se reorganiza automáticamente al "
+            "ancho de la pantalla. Más acciones contiene todas las acciones "
+            "activas que no estén visibles directamente en la barra.",
             self,
         )
         bar_note.setWordWrap(True)
@@ -2750,11 +3739,31 @@ class SettingsDialog(QDialog):
         acttab_layout.addLayout(btns)
         note = QLabel(
             "Arrastra las acciones para distribuirlas en el orden exacto que quieras; "
-            "también puedes usar ↑ y ↓. Activa solo las que necesites.",
+            "también puedes usar ↑ y ↓. El contexto puede ocultar acciones, pero "
+            "nunca cambia el orden relativo que establezcas.",
             self,
         )
         note.setWordWrap(True)
         acttab_layout.addWidget(note)
+        automation_group = QGroupBox("Automatizaciones visuales")
+        automation_layout = QVBoxLayout(automation_group)
+        self.automation_list = QListWidget(self)
+        self.automation_list.setMaximumHeight(110)
+        automation_layout.addWidget(self.automation_list)
+        self._populate_automations()
+        automation_buttons = QHBoxLayout()
+        add_automation = QPushButton("Crear flujo", self)
+        add_automation.clicked.connect(self._add_automation)
+        edit_automation = QPushButton("Editar flujo", self)
+        edit_automation.clicked.connect(self._edit_automation)
+        remove_automation = QPushButton("Eliminar flujo", self)
+        remove_automation.clicked.connect(self._remove_automation)
+        automation_buttons.addWidget(add_automation)
+        automation_buttons.addWidget(edit_automation)
+        automation_buttons.addWidget(remove_automation)
+        automation_buttons.addStretch()
+        automation_layout.addLayout(automation_buttons)
+        acttab_layout.addWidget(automation_group)
 
         # ── Pestaña 8: Acerca de ──
         about_tab = QWidget()
@@ -2840,6 +3849,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(flt_tab, "  Filtros  ")
         tabs.addTab(wl_tab, "  Wayland  ")
         tabs.addTab(system_tab, "  Sistema  ")
+        tabs.addTab(integrations_tab, "  Integraciones  ")
         tabs.addTab(diag_tab, "  Diagnostico  ")
         tabs.addTab(acttab, "  Acciones  ")
         tabs.addTab(about_tab, "  Acerca de  ")
@@ -3201,6 +4211,70 @@ class SettingsDialog(QDialog):
             ordered_actions.append(action)
         self.actions = ordered_actions
 
+    def _populate_automations(self):
+        self.automation_list.clear()
+        for flow in self.automations:
+            operations = " → ".join(
+                str(step.get("operation", "")) for step in flow.get("steps", [])
+            )
+            item = QListWidgetItem(f"{flow.get('name', 'Flujo')} · {operations}")
+            item.setData(Qt.UserRole, flow.get("id"))
+            self.automation_list.addItem(item)
+
+    def _add_automation(self):
+        dialog = AutomationEditDialog(parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.automations.append(dialog.get_flow())
+        self._populate_automations()
+
+    def _edit_automation(self):
+        row = self.automation_list.currentRow()
+        if not 0 <= row < len(self.automations):
+            QMessageBox.information(self, "Editar flujo", "Selecciona un flujo primero.")
+            return
+        dialog = AutomationEditDialog(self.automations[row], self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self.automations[row] = dialog.get_flow()
+        self._populate_automations()
+        self.automation_list.setCurrentRow(row)
+
+    def _remove_automation(self):
+        row = self.automation_list.currentRow()
+        if 0 <= row < len(self.automations):
+            self.automations.pop(row)
+            self._populate_automations()
+
+    def _populate_torrent_servers(self):
+        self.torrent_servers_list.clear()
+        for server in self.torrent_servers:
+            kind = "qBittorrent" if server.get("type") == "qbittorrent" else "Transmission"
+            self.torrent_servers_list.addItem(
+                f"{server.get('name', 'Servidor')}  ·  {kind}  ·  {server.get('endpoint', '')}"
+            )
+
+    def _add_torrent_server(self):
+        dialog = TorrentServerDialog(parent=self)
+        if dialog.exec() == QDialog.Accepted:
+            self.torrent_servers.append(dialog.value())
+            self._populate_torrent_servers()
+
+    def _edit_torrent_server(self):
+        row = self.torrent_servers_list.currentRow()
+        if 0 <= row < len(self.torrent_servers):
+            dialog = TorrentServerDialog(self.torrent_servers[row], self)
+            if dialog.exec() == QDialog.Accepted:
+                self.torrent_servers[row] = dialog.value()
+                self._populate_torrent_servers()
+                self.torrent_servers_list.setCurrentRow(row)
+
+    def _remove_torrent_server(self):
+        row = self.torrent_servers_list.currentRow()
+        if 0 <= row < len(self.torrent_servers):
+            self.torrent_servers.pop(row)
+            self._populate_torrent_servers()
+
     def collect_settings(self):
         self._sync_enabled_from_list()
         self._sync_context_profiles_from_list()
@@ -3211,8 +4285,13 @@ class SettingsDialog(QDialog):
         self.settings["popup_opacity"] = self.opacity.value() / 100
         self.settings["show_numeric_badges"] = self.show_numeric_badges.isChecked()
         self.settings["popup_delay_ms"] = self.popup_delay.value()
+        self.settings["adaptive_delay_enabled"] = self.adaptive_delay.isChecked()
         self.settings["popup_auto_hide_ms"] = self.auto_hide.value()
         self.settings["popup_cursor_gap"] = self.cursor_gap.value()
+        self.settings["popup_position_preference"] = (
+            self.position_preference.currentData()
+        )
+        self.settings["torrent_servers"] = [dict(item) for item in self.torrent_servers]
         self.settings["confirm_terminal_execution"] = self.confirm_terminal.isChecked()
         self.settings["enable_wayland_polling"] = self.enable_wl_polling.isChecked()
         self.settings["popup_wayland_fallback_top"] = self.fallback_top.value()
@@ -3224,6 +4303,7 @@ class SettingsDialog(QDialog):
         self.settings["show_all_popup_actions"] = (
             self.show_all_popup_actions.isChecked()
         )
+        self.settings["popup_allow_two_rows"] = self.popup_allow_two_rows.isChecked()
         self.settings["show_on_selection"] = self.show_on_selection.isChecked()
         self.settings["start_at_login"] = self.start_at_login.isChecked()
         self.settings["disable_in_games"] = self.disable_in_games.isChecked()
@@ -3236,6 +4316,8 @@ class SettingsDialog(QDialog):
         self.settings["sticky_popup"] = self.sticky_popup.isChecked()
         self.settings["enable_global_hotkey"] = self.enable_global_hotkey.isChecked()
         self.settings["context_aware"] = self.context_aware.isChecked()
+        self.settings["history_enabled"] = self.history_enabled.isChecked()
+        self.settings["history_max_items"] = self.history_max_items.value()
         self.settings["context_profiles_enabled"] = (
             self.context_profiles_enabled.isChecked()
         )
@@ -3261,11 +4343,18 @@ class SettingsDialog(QDialog):
 
     def apply_clicked(self):
         settings, actions = self.collect_settings()
+        actions = [
+            action
+            for action in actions
+            if not str(action.get("cmd", "")).startswith("automation:")
+        ]
         if actions != self.controller.actions:
             self.controller.actions = actions
             self.controller.save_actions()
             self.controller.popup.set_actions(actions)
         self.controller.update_settings(settings)
+        write_json_atomic(AUTOMATIONS_FILE, {"automations": self.automations})
+        self.controller.reload_automations()
 
 
 class WorkerSignals(QObject):
@@ -3340,6 +4429,14 @@ class TextPikApp(QObject):
                 )
             sys.exit(0)
 
+        self.crash_sentinel = CrashSentinel(RUN_SENTINEL_FILE)
+        self.previous_run = self.crash_sentinel.start(APP_VERSION)
+        if self.previous_run.unclean:
+            logger.warning(
+                "La ejecución anterior no registró un cierre limpio (versión %s)",
+                self.previous_run.version or "desconocida",
+            )
+
         check_runtime_dependencies()
         self.cursor_bridge = None
         self.cursor_bridge_adaptor = None
@@ -3347,6 +4444,8 @@ class TextPikApp(QObject):
         self.setup_cursor_bridge()
 
         self.actions = self.load_actions()
+        if upgrade_builtin_action_metadata(self.actions):
+            self.save_actions()
         if not self.settings.get("spelling_action_migrated", False):
             if not any(action.get("cmd") == "spellcheck" for action in self.actions):
                 spelling_action = next(
@@ -3360,6 +4459,65 @@ class TextPikApp(QObject):
                     self.save_actions()
             self.settings["spelling_action_migrated"] = True
             self.save_settings()
+        new_core_commands = {
+            "insight",
+            "grammar",
+            "undo",
+            "textpik-history",
+            "ocr-image",
+            "ocr-region",
+            "format-json",
+            "extract-entities",
+            "color-details",
+            "slugify",
+            "clean-terminal",
+            "compare-clipboard",
+            "speak",
+            "cut",
+            "trim",
+            "normalize-spaces",
+            "title-case",
+            "quote-text",
+            "bullet-list",
+            "sort-lines",
+            "unique-lines",
+            "url-encode",
+            "url-decode",
+            "base64-encode",
+            "html-escape",
+            "xdg-open 'https://claude.ai/new?q={url}'",
+            "xdg-open 'https://gemini.google.com/app?q={url}'",
+            "open-magnet",
+            "send-magnet",
+            "open-media-player",
+        }
+        existing_commands = {action.get("cmd") for action in self.actions}
+        added_core_action = False
+        for default_action in DEFAULT_ACTIONS:
+            if (
+                default_action.get("cmd") in new_core_commands
+                and default_action.get("cmd") not in existing_commands
+            ):
+                migrated = migrate_action(default_action)
+                if migrated is not None:
+                    self.actions.append(migrated)
+                    existing_commands.add(migrated["cmd"])
+                    added_core_action = True
+        if added_core_action:
+            self.save_actions()
+        default_variants = {
+            action["cmd"]: action.get("variants", {})
+            for action in DEFAULT_ACTIONS
+            if action.get("variants")
+        }
+        variants_migrated = False
+        for action in self.actions:
+            variants = default_variants.get(action.get("cmd"))
+            if variants and not action.get("variants"):
+                action["variants"] = dict(variants)
+                variants_migrated = True
+        if variants_migrated:
+            self.save_actions()
         extension_actions, self.extension_issues = inspect_local_extensions(
             EXTENSIONS_DIR
         )
@@ -3370,8 +4528,39 @@ class TextPikApp(QObject):
                 continue
             self.actions.append(action)
             existing_ids.add(action_id)
+        self.automations = self._load_automations()
+        for flow in self.automations:
+            action_id = f"automation-{flow['id']}"
+            if action_id in existing_ids:
+                continue
+            self.actions.append(
+                {
+                    "id": action_id,
+                    "name": flow["name"],
+                    "icon": flow.get("icon", "capitalize.svg"),
+                    "cmd": f"automation:{flow['id']}",
+                    "enabled": bool(flow.get("enabled", True)),
+                    "context": list(flow.get("conditions", {}).get("text_types", [])),
+                    "permissions": [],
+                    "category": "Automatizaciones",
+                }
+            )
+            existing_ids.add(action_id)
         self.permissions = PermissionStore(PERMISSIONS_FILE)
-        self.spelling = SpellingService()
+        self.spelling = SpellingService(
+            ignored=self.settings.get("spelling_ignored_words", []),
+            personal=self.settings.get("spelling_personal_words", []),
+        )
+        self.grammar = LanguageToolService()
+        self.ollama = OllamaProvider()
+        self.ocr = TesseractProvider()
+        self.undo = UndoManager()
+        self.history = HistoryStore(
+            HISTORY_FILE,
+            maximum=self.settings.get("history_max_items", 100),
+            max_age_days=self.settings.get("history_max_age_days", 30),
+            key=os.environ.get("TEXTPIK_HISTORY_KEY", "").encode() or None,
+        )
         self.atspi = AtspiSelectionBackend()
         self.popup_state = PopupStateMachine()
         self._service_cache = (0.0, set())
@@ -3398,20 +4587,23 @@ class TextPikApp(QObject):
         self._animating = False
         self._popup_animation = None
         self._popup_immunity_until = 0.0
-        self._outside_count = 0
         self._selection_released = False
         self._last_popup_text = ""
         self._last_popup_at = 0.0
         self._last_intent_confidence = 0.0
         self._last_context_profile = ""
+        self._last_text_types = frozenset()
+        self._last_anchor_decision = "sin ancla"
         self._last_atspi_signature = None
         self._pending_atspi_node = None
         self._runtime_probe_running = False
+        self._last_capability_probe_at = 0.0
         self._runtime_snapshot = {
             "game": False,
             "blocked": False,
             "activity_blocked": False,
             "compositor_anchor": None,
+            "capabilities": RuntimeCapabilities(),
         }
 
         self.atspi_selection_changed.connect(self._queue_atspi_selection)
@@ -3482,9 +4674,7 @@ class TextPikApp(QObject):
                 return
 
             bridge = CursorBridge()
-            bridge._on_click_outside = lambda: (
-                self.popup.is_interacting() or self.hide_popup()
-            )
+            bridge._on_click_outside = self._on_kwin_window_activated
             adaptor = create_cursor_bridge_adaptor(bridge)
             if not bus.registerObject(
                 CURSOR_BRIDGE_PATH,
@@ -3511,6 +4701,8 @@ class TextPikApp(QObject):
 
     def setup_hotkey(self):
         self.teardown_hotkey()
+        if hasattr(self, "crash_sentinel"):
+            self.crash_sentinel.clean()
         if not self.settings.get("enable_global_hotkey", False):
             return
         try:
@@ -3540,6 +4732,10 @@ class TextPikApp(QObject):
         """Refresh slow desktop facts outside the selection-to-popup path."""
         if self._runtime_probe_running:
             return
+        capability_due = (
+            self._last_capability_probe_at == 0.0
+            or time.monotonic() - self._last_capability_probe_at >= 60.0
+        )
         needs_process = self.settings.get("disable_in_games", False) or self.settings.get(
             "blocked_apps_enabled", False
         )
@@ -3547,7 +4743,7 @@ class TextPikApp(QObject):
         needs_compositor = is_qt_wayland() and any(
             name in desktop for name in ("hyprland", "sway")
         )
-        if not needs_process and not needs_compositor:
+        if not needs_process and not needs_compositor and not capability_due:
             return
         self._runtime_probe_running = True
         settings = dict(self.settings)
@@ -3558,7 +4754,7 @@ class TextPikApp(QObject):
             if needs_compositor:
                 candidates = (hyprland_cursor_anchor(), sway_cursor_anchor())
                 anchor = self.anchor_resolver.resolve(candidates)
-            return {
+            snapshot = {
                 "game": process_filter.is_foreground_process_game()
                 if settings.get("disable_in_games", False)
                 else False,
@@ -3567,6 +4763,9 @@ class TextPikApp(QObject):
                 else False,
                 "compositor_anchor": anchor,
             }
+            if capability_due:
+                snapshot["capabilities"] = probe_runtime_capabilities()
+            return snapshot
 
         worker = FunctionWorker(task)
         worker.signals.succeeded.connect(self.runtime_probe_ready.emit)
@@ -3590,6 +4789,8 @@ class TextPikApp(QObject):
     def _apply_runtime_probe(self, snapshot):
         if isinstance(snapshot, dict):
             self._runtime_snapshot.update(snapshot)
+            if "capabilities" in snapshot:
+                self._last_capability_probe_at = time.monotonic()
         self._runtime_probe_running = False
 
     def _refresh_activity_snapshot(self):
@@ -3625,16 +4826,60 @@ class TextPikApp(QObject):
 
     def _monitor_selection_cleared(self):
         self._begin_selection_session("clipboard-cleared")
-        self.hide_popup(invalidate_session=False)
+        if self.popup.isVisible():
+            if self.popup.is_interacting() or self.popup.pointer_inside():
+                logger.debug("Selección vacía durante interacción con el popup")
+                return
+            pointer_state = self.pointer.state()
+            primary_pressed = bool(
+                pointer_state is not None
+                and pointer_state[2] & X11Pointer.PRIMARY_MASK
+            )
+            if primary_pressed and self._selection_released:
+                logger.info("Selección vacía por clic primario externo; ocultando")
+                self.hide_popup(invalidate_session=False)
+                return
+            if time.monotonic() - self._last_popup_at >= 0.35:
+                # On native Wayland the global button state is intentionally
+                # unavailable. Once the initial selection has stabilized, an
+                # empty PRIMARY outside the toolbar is the reliable same-window
+                # proxy for a click elsewhere.
+                logger.info("Selección vacía fuera del popup; ocultando")
+                self.hide_popup(invalidate_session=False)
+                return
+            # PRIMARY is allowed to disappear while the captured toolbar lives.
+            # A real external click or the eight-second lifetime owns dismissal.
+            logger.debug("Selección vacía; conservando popup hasta su cierre normal")
+        else:
+            self.hide_popup(invalidate_session=False)
+
+    def _on_kwin_window_activated(self):
+        """Close on an external activation certified by the KWin bridge."""
+        if not self.popup.isVisible():
+            return
+        if self.popup.pointer_inside():
+            return
+        logger.info("KWin confirmó activación externa; ocultando popup")
+        self.hide_popup()
 
     def _queue_atspi_selection(self, node):
         if not self.monitor._active or self.popup.is_interacting():
             return
+        if (
+            self.monitor.secondary_interaction_active()
+            or self.atspi.context_menu_active()
+        ):
+            logger.debug("Evento AT-SPI ignorado durante menú contextual")
+            self._suppress_popup("secondary-click")
+            return
         session_id = self._begin_selection_session("atspi-event")
-        self._pending_atspi_node = (node, session_id)
+        self._pending_atspi_node = (node, session_id, time.monotonic())
         # Accessibility events can arrive before the final range is committed.
         self.popup_state.transition(PopupPhase.STABILIZING)
-        self.atspi_event_timer.start(max(45, self.settings.get("popup_delay_ms", 0)))
+        delay = max(45, self.settings.get("popup_delay_ms", 0))
+        if self.settings.get("adaptive_delay_enabled", True):
+            delay = max(delay, self.settings.get("adaptive_delay_min_ms", 55))
+        self.atspi_event_timer.start(delay)
 
     def _finish_popup_interaction(self):
         if self.popup.isVisible():
@@ -3643,22 +4888,41 @@ class TextPikApp(QObject):
             self.popup_state.reset()
 
     def _consume_atspi_selection(self):
+        if (
+            self.monitor.secondary_interaction_active()
+            or self.atspi.context_menu_active()
+        ):
+            self._pending_atspi_node = None
+            self._suppress_popup("secondary-click")
+            return
         if self.monitor._primary_button_pressed():
             self.atspi_event_timer.start(45)
             return
         pending, self._pending_atspi_node = self._pending_atspi_node, None
         if pending is None:
             return
-        node, session_id = pending
+        node, session_id, queued_at = pending
         if not self._selection_session_is_current(session_id):
             logger.debug("Evento AT-SPI obsoleto descartado: %s", session_id)
             return
-        context = self.atspi.read_selection(node)
+        context = node if isinstance(node, SelectionContext) else self.atspi.read_selection(node)
         if not self._selection_session_is_current(session_id):
             return
         if context is None or not context.text.strip():
-            self.hide_popup(invalidate_session=False)
+            self._monitor_selection_cleared()
             return
+        if self.settings.get("adaptive_delay_enabled", True):
+            desired = adaptive_selection_delay(
+                context,
+                context.text,
+                base_ms=self.settings.get("adaptive_delay_min_ms", 55),
+            )
+            desired = min(desired, self.settings.get("adaptive_delay_max_ms", 180))
+            elapsed_ms = (time.monotonic() - queued_at) * 1000
+            if elapsed_ms + 4 < desired:
+                self._pending_atspi_node = (context, session_id, queued_at)
+                self.atspi_event_timer.start(max(5, round(desired - elapsed_ms)))
+                return
         if len(context.text.strip()) > self.settings.get("max_selection_length", 5000):
             self.hide_popup(invalidate_session=False)
             return
@@ -3676,19 +4940,22 @@ class TextPikApp(QObject):
 
     def _focus_popup_for_keyboard(self):
         """Only an explicit hotkey may take focus from the user's application."""
+        self.popup.set_keyboard_mode(True)
         self.popup.activateWindow()
         self.popup.setFocus(Qt.ShortcutFocusReason)
 
     def on_application_state_changed(self, state):
         if self.popup.is_interacting():
             return
-        if state != Qt.ApplicationActive:
+        if self.popup.keyboard_mode and state != Qt.ApplicationActive:
             self.hide_popup()
 
     def on_focus_window_changed(self, focus_window):
         if not self.popup.isVisible():
             return
         if self.popup.is_interacting():
+            return
+        if not self.popup.keyboard_mode:
             return
         popup_window = self.popup.windowHandle()
         if focus_window is popup_window:
@@ -3701,21 +4968,25 @@ class TextPikApp(QObject):
             self.hide_check_timer.stop()
             return
 
-        if self.popup.is_interacting():
-            self._outside_count = 0
-            return
-
-        if time.monotonic() < self._popup_immunity_until:
-            self._outside_count = 0
-            return
-
         pointer_state = self.pointer.state()
         if pointer_state is None:
-            buttons_pressed = QApplication.mouseButtons() != Qt.NoButton
+            qt_buttons = QApplication.mouseButtons()
+            buttons_pressed = qt_buttons != Qt.NoButton
+            secondary_pressed = bool(qt_buttons & Qt.RightButton)
             px, py = QCursor.pos().x(), QCursor.pos().y()
         else:
             px, py, mask = pointer_state
             buttons_pressed = bool(mask & X11Pointer.BUTTON_MASKS)
+            secondary_pressed = bool(mask & X11Pointer.SECONDARY_MASK)
+
+        if secondary_pressed:
+            self.monitor.suppress_secondary_interaction()
+            logger.info("Clic secundario detectado; cediendo al menú del sistema")
+            self.hide_popup()
+            return
+
+        if self.popup.is_interacting():
+            return
 
         if not self._selection_released:
             if not buttons_pressed:
@@ -3726,11 +4997,9 @@ class TextPikApp(QObject):
         outside = not self.popup.rect().contains(local_pos)
 
         if buttons_pressed and outside:
-            if self.popup.is_interacting():
-                self._outside_count += 1
-                return
             logger.info("Click externo detectado; ocultando popup")
             self.hide_popup()
+            return
 
     def load_actions(self):
         return load_actions_file()
@@ -3776,14 +5045,79 @@ class TextPikApp(QObject):
 
     def reload_actions(self):
         self.actions = self.load_actions()
+        extension_actions, self.extension_issues = inspect_local_extensions(
+            EXTENSIONS_DIR
+        )
+        existing_ids = {
+            action.get("id", action.get("cmd")) for action in self.actions
+        }
+        for action in extension_actions:
+            action_id = action.get("id", action.get("cmd"))
+            if action_id not in existing_ids:
+                self.actions.append(action)
+                existing_ids.add(action_id)
+        self.automations = self._load_automations()
+        for flow in self.automations:
+            action_id = f"automation-{flow['id']}"
+            if action_id in existing_ids:
+                continue
+            self.actions.append(
+                {
+                    "id": action_id,
+                    "name": flow["name"],
+                    "icon": flow.get("icon", "capitalize.svg"),
+                    "cmd": f"automation:{flow['id']}",
+                    "enabled": bool(flow.get("enabled", True)),
+                    "context": list(flow.get("conditions", {}).get("text_types", [])),
+                    "permissions": [],
+                    "category": "Automatizaciones",
+                }
+            )
+            existing_ids.add(action_id)
+        self.popup._actions_key = None
         self.popup.set_actions(self.actions)
         QMessageBox.information(None, "Configuracion", "Acciones recargadas.")
+
+    def reload_automations(self):
+        self.actions = [
+            action
+            for action in self.actions
+            if not str(action.get("cmd", "")).startswith("automation:")
+        ]
+        self.automations = self._load_automations()
+        for flow in self.automations:
+            self.actions.append(
+                {
+                    "id": f"automation-{flow['id']}",
+                    "name": flow["name"],
+                    "icon": flow.get("icon", "capitalize.svg"),
+                    "cmd": f"automation:{flow['id']}",
+                    "enabled": bool(flow.get("enabled", True)),
+                    "context": list(
+                        flow.get("conditions", {}).get("text_types", [])
+                    ),
+                    "permissions": [],
+                    "category": "Automatizaciones",
+                }
+            )
+        self.popup._actions_key = None
+        self.popup.set_actions(self.actions)
 
     def reload_settings(self):
         self.settings = load_settings()
         setup_logging(self.settings)
         self.monitor.settings = self.settings
         self.process_filter.settings = self.settings
+        self.spelling = SpellingService(
+            ignored=self.settings.get("spelling_ignored_words", []),
+            personal=self.settings.get("spelling_personal_words", []),
+        )
+        self.history = HistoryStore(
+            HISTORY_FILE,
+            maximum=self.settings.get("history_max_items", 100),
+            max_age_days=self.settings.get("history_max_age_days", 30),
+            key=os.environ.get("TEXTPIK_HISTORY_KEY", "").encode() or None,
+        )
         self.popup.apply_settings(self.settings)
         if hasattr(self.monitor, "_poll_timer"):
             if self.settings.get("enable_wayland_polling", True) and not getattr(
@@ -3830,6 +5164,8 @@ class TextPikApp(QObject):
             self._animating = False
 
     def _on_popup_dismissed(self):
+        self.hide_check_timer.stop()
+        self.auto_hide_timer.stop()
         self._begin_selection_session("popup-dismissed")
         self.popup_state.reset()
 
@@ -3839,7 +5175,6 @@ class TextPikApp(QObject):
         self.hide_check_timer.stop()
         self.auto_hide_timer.stop()
         self._popup_immunity_until = 0.0
-        self._outside_count = 0
         self._selection_released = False
         if self.popup.isVisible():
             if not self._animating:
@@ -3847,6 +5182,7 @@ class TextPikApp(QObject):
             else:
                 self._animating = False
                 self.popup.hide()
+        self.popup.set_keyboard_mode(False)
         self.popup_state.reset()
 
     def _suppress_popup(self, reason):
@@ -3861,6 +5197,16 @@ class TextPikApp(QObject):
         setup_logging(self.settings)
         self.monitor.settings = self.settings
         self.process_filter.settings = self.settings
+        self.spelling = SpellingService(
+            ignored=self.settings.get("spelling_ignored_words", []),
+            personal=self.settings.get("spelling_personal_words", []),
+        )
+        self.history = HistoryStore(
+            HISTORY_FILE,
+            maximum=self.settings.get("history_max_items", 100),
+            max_age_days=self.settings.get("history_max_age_days", 30),
+            key=os.environ.get("TEXTPIK_HISTORY_KEY", "").encode() or None,
+        )
         self.popup.apply_settings(self.settings)
         self.popup.set_actions(self.popup.actions)
         if hotkey_was_enabled != self.settings.get("enable_global_hotkey", False):
@@ -3917,9 +5263,12 @@ class TextPikApp(QObject):
             f"ydotool: {'ok' if check_command('ydotool') else 'falta'}",
             f"xdg-open: {'ok' if check_command('xdg-open') else 'falta'}",
             f"QtDBus: {'ok' if qt_dbus_available() else 'falta'}",
+            f"XDG Desktop Portal: {'ok' if 'org.freedesktop.portal.Desktop' in self._desktop_dbus_services() else 'falta'}",
+            f"Secret Service: {'ok' if 'org.freedesktop.secrets' in self._desktop_dbus_services() else 'falta'}",
             f"AT-SPI: {'ok' if self.atspi.available else 'falta'}",
             f"AT-SPI deteccion: {'eventos' if self.atspi_events_active else 'polling/fallback'}",
             f"Estado popup: {self.popup_state.phase.value}",
+            f"Cierre anterior: {'anómalo' if self.previous_run.unclean else 'limpio'}",
             f"Autoinicio: {'activo' if AUTOSTART_FILE.exists() else 'inactivo'}",
             f"Puente KWin: {bridge_status}",
             f"Popup visible: {'si' if self.popup.isVisible() else 'no'}",
@@ -3927,6 +5276,7 @@ class TextPikApp(QObject):
             f"Acciones habilitadas: {enabled_actions}/{len(self.actions)}",
             f"Extensiones rechazadas: {len(self.extension_issues)}",
             f"Confianza última selección: {self._last_intent_confidence:.0%}",
+            f"Proveedor de posición: {self._last_anchor_decision}",
             f"Perfil contextual: {self._last_context_profile or 'ninguno'}",
             *performance_lines,
             f"Log: {LOG_FILE}",
@@ -4006,6 +5356,13 @@ class TextPikApp(QObject):
         elif not self._selection_session_is_current(session_id):
             logger.debug("Solicitud de popup obsoleta descartada: %s", session_id)
             return
+        if not force and (
+            self.monitor.secondary_interaction_active()
+            or self.atspi.context_menu_active()
+        ):
+            logger.info("Popup omitido durante interacción con menú contextual")
+            self._suppress_popup("secondary-click")
+            return
         if not force and not self.monitor._active:
             return
         if not force and not self.settings.get("show_on_selection", True):
@@ -4022,6 +5379,11 @@ class TextPikApp(QObject):
         atspi_context = context or (
             self.atspi.read_selection() if self.atspi.available else None
         )
+        if not force and self.atspi.context_menu_active():
+            self.monitor.suppress_secondary_interaction()
+            logger.info("Selección automática ignorada: menú contextual activo")
+            self._suppress_popup("secondary-click")
+            return
         if not self._selection_session_is_current(session_id):
             logger.debug("Lectura AT-SPI obsoleta descartada: %s", session_id)
             return
@@ -4065,9 +5427,18 @@ class TextPikApp(QObject):
             )
             self._suppress_popup(intent.reason)
             return
+        if self.settings.get("history_enabled", False) and not self.selection_context.sensitive:
+            try:
+                self.history.add(
+                    text,
+                    self.selection_context.application,
+                    self.settings.get("blocked_apps", []),
+                )
+            except (OSError, ValueError, ImportError):
+                logger.debug("No se pudo actualizar el historial privado", exc_info=True)
         self._last_intent_confidence = 1.0 if force else intent.confidence
         adaptive_popup = self.settings.get("adaptive_popup", True)
-        minimum_confidence = self.settings.get("popup_min_confidence", 45) / 100
+        minimum_confidence = self.settings.get("popup_min_confidence", 62) / 100
         if not force and adaptive_popup and intent.confidence < minimum_confidence:
             logger.info(
                 "Popup omitido por baja confianza: %.0f%% < %.0f%%",
@@ -4080,7 +5451,7 @@ class TextPikApp(QObject):
             not force
             and adaptive_popup
             and intent.confidence
-            < self.settings.get("popup_full_confidence", 78) / 100
+            < self.settings.get("popup_full_confidence", 84) / 100
         )
         if text:
             now = time.monotonic()
@@ -4111,10 +5482,15 @@ class TextPikApp(QObject):
                 self.performance.observe(
                     "text-classification", classification_started
                 )
+            self._last_text_types = text_types
             snapshot = ContextSnapshot.from_selection(
                 self.selection_context,
                 text_types=text_types,
                 clipboard_has_text=clipboard_has_text(),
+                multiline="\n" in text or "\r" in text,
+                undo_available=self.undo.can_undo(
+                    self.selection_context.application
+                ),
             )
             profile = None
             if self.settings.get("context_profiles_enabled", False):
@@ -4123,11 +5499,15 @@ class TextPikApp(QObject):
                 )
             self._last_context_profile = profile.name if profile else ""
             planning_started = self.performance.start()
+            available_actions = [
+                action
+                for action in self.actions
+                if action.get("enabled", True) and self._action_available(action)
+            ]
             visible = plan_actions(
-                self.actions,
+                available_actions,
                 snapshot,
                 context_aware=context_aware,
-                is_available=self._action_available,
                 allowed_action_ids=profile.action_ids if profile else None,
             )
             self.performance.observe("action-planning", planning_started)
@@ -4136,35 +5516,44 @@ class TextPikApp(QObject):
                 self._suppress_popup("no-actions")
                 return
             self.popup.set_context(self.selection_context)
-            self.popup.set_actions(visible, compact=compact_popup)
+            self.popup.clear_inline_result()
+            self.popup.set_actions(
+                visible,
+                compact=compact_popup,
+                palette_actions=available_actions,
+            )
             pointer_anchor = self._fast_pointer_anchor()
-            anchor = self.anchor_resolver.resolve(
+            anchor_decision = self.anchor_resolver.resolve_with_reason(
                 (
                     self.selection_context.anchor,
                     self._runtime_snapshot.get("compositor_anchor"),
                     pointer_anchor,
                 )
             )
+            anchor = anchor_decision.anchor
+            self._last_anchor_decision = (
+                f"{anchor_decision.reason} ({anchor_decision.considered} candidatos)"
+            )
             if not self._selection_session_is_current(session_id):
                 return
+            self.popup.set_keyboard_mode(force)
             self.popup.show_at_cursor(anchor, self.selection_context.selection_rect)
             self.popup_state.visible()
             self.performance.observe("popup-hot-path", hot_path_started)
             self._animate_popup_fade_in()
             self._last_popup_text = text
             self._last_popup_at = now
-            self._popup_immunity_until = time.monotonic() + 0.3
-            self._outside_count = 0
-            self._selection_released = False
+            self._popup_immunity_until = time.monotonic() + 1.25
+            self._selection_released = not self.monitor._primary_button_pressed()
             self.hide_check_timer.start(50)
-            auto_hide_ms = self.settings.get("popup_auto_hide_ms", 5000)
+            auto_hide_ms = self.settings.get("popup_auto_hide_ms", 8000)
             if auto_hide_ms > 0 and not self.popup.is_sticky():
                 self.auto_hide_timer.start(auto_hide_ms)
 
     def _auto_hide_popup(self):
         if not self.popup.isVisible():
             return
-        if self.popup.is_interacting() or self.popup.underMouse():
+        if self.popup.is_interacting():
             self.auto_hide_timer.start(1000)
             return
         logger.info("Popup ocultado por inactividad")
@@ -4173,6 +5562,12 @@ class TextPikApp(QObject):
     def _poll_atspi_selection(self):
         """Covers Wayland desktops where PRIMARY selection is not observable."""
         if not self.monitor._active or self.popup.is_interacting():
+            return
+        if (
+            self.monitor.secondary_interaction_active()
+            or self.atspi.context_menu_active()
+        ):
+            self._suppress_popup("secondary-click")
             return
         if self.monitor._primary_button_pressed():
             return
@@ -4215,7 +5610,13 @@ class TextPikApp(QObject):
             from PySide6.QtDBus import QDBusConnection
 
             interface = QDBusConnection.sessionBus().interface()
-            for name in ("org.kde.klipper", "org.kde.kdeconnect"):
+            for name in (
+                "org.kde.klipper",
+                "org.kde.kdeconnect",
+                "org.gnome.Shell.Extensions.GSConnect",
+                "org.freedesktop.portal.Desktop",
+                "org.freedesktop.secrets",
+            ):
                 reply = interface.isServiceRegistered(name) if interface else None
                 if reply and reply.isValid() and bool(reply.value()):
                     services.add(name)
@@ -4230,6 +5631,8 @@ class TextPikApp(QObject):
             wayland=is_qt_wayland(),
             kde=is_kde(),
             dbus_services=self._desktop_dbus_services(),
+            history_enabled=self.settings.get("history_enabled", False),
+            capabilities=self._runtime_snapshot.get("capabilities"),
         )
 
     def pin_action(self, action_id):
@@ -4245,6 +5648,7 @@ class TextPikApp(QObject):
         if index is None:
             return
         action = self.actions.pop(index)
+        action["pinned"] = True
         self.actions.insert(0, action)
         self.save_actions()
         self.popup._actions_key = None
@@ -4270,7 +5674,13 @@ class TextPikApp(QObject):
     def execute_action(self, cmd, text):
         text = text or ""
         manifest = next(
-            (action for action in self.actions if action.get("cmd") == cmd), None
+            (
+                action
+                for action in self.actions
+                if action.get("cmd") == cmd
+                or cmd in action.get("variants", {}).values()
+            ),
+            None,
         )
         if manifest and not self._authorize_action(manifest):
             return
@@ -4278,6 +5688,16 @@ class TextPikApp(QObject):
             self.monitor.suppress_events()
             self.copy_text_to_clipboard(text)
             self._show_toast("Texto copiado")
+            return
+
+        if cmd == "cut":
+            self.monitor.suppress_events()
+            self.copy_text_to_clipboard(text)
+            if self.atspi.replace_selection(self.selection_context, ""):
+                self.undo.remember(text, "", self.selection_context.application)
+                self._show_toast("Selección cortada")
+            else:
+                self._show_toast("Texto copiado; la aplicación no permite cortar")
             return
 
         if cmd == "paste":
@@ -4308,35 +5728,233 @@ class TextPikApp(QObject):
                 QMessageBox.warning(None, "Error", f"No se pudo abrir la URL:\n{exc}")
             return
 
-        if cmd in {"uppercase", "lowercase", "capitalize", "remove-breaks"}:
-            result = transform_text(cmd, text)
+        if cmd == "open-magnet":
+            magnet = normalize_magnet(text)
+            if not magnet:
+                QMessageBox.warning(None, "Magnet inválido", "Selecciona un enlace magnet BitTorrent válido.")
+                return
+            handler = default_desktop_handler("x-scheme-handler/magnet")
+            if not handler:
+                QMessageBox.warning(
+                    None,
+                    "Cliente torrent no configurado",
+                    "No existe una aplicación predeterminada para enlaces magnet.",
+                )
+                return
+            if not QDesktopServices.openUrl(QUrl(magnet)):
+                QMessageBox.warning(None, "Error", f"No se pudo abrir el cliente torrent {handler}.")
+                return
+            self._show_toast(f"Magnet enviado a {handler.removesuffix('.desktop')}")
+            return
+
+        if cmd == "open-media-player":
+            try:
+                argv, player = media_player_command(text)
+                subprocess.Popen(argv)
+                self._show_toast(f"Abriendo en {player.removesuffix('.desktop')}")
+            except (OSError, RuntimeError, ValueError) as exc:
+                QMessageBox.warning(None, "Reproductor local", str(exc))
+            return
+
+        if cmd == "send-magnet":
+            magnet = normalize_magnet(text)
+            servers = self.settings.get("torrent_servers", [])
+            if not magnet:
+                QMessageBox.warning(None, "Magnet inválido", "Selecciona un enlace magnet BitTorrent válido.")
+                return
+            if not servers:
+                QMessageBox.information(
+                    None,
+                    "Servidor torrent",
+                    "Añade un servidor Transmission o qBittorrent en Configuración → Integraciones.",
+                )
+                return
+            server = servers[0]
+            if len(servers) > 1:
+                labels = [item["name"] for item in servers]
+                selected, accepted = QInputDialog.getItem(
+                    None, "Enviar magnet", "Servidor:", labels, 0, False
+                )
+                if not accepted:
+                    return
+                server = servers[labels.index(selected)]
+            self._show_toast(f"Enviando magnet a {server['name']}…")
+            worker = FunctionWorker(lambda: send_magnet_to_server(server, magnet))
+            worker.signals.succeeded.connect(self._show_toast)
+            worker.signals.failed.connect(
+                lambda message: QMessageBox.warning(None, "Servidor torrent", message)
+            )
+            self._start_worker(worker)
+            return
+
+        if cmd in TRANSFORMS:
+            try:
+                result = transform_text(cmd, text)
+            except ValueError as exc:
+                self.popup.show_inline_result("Transformación", str(exc))
+                return
+            if result == text:
+                self._show_toast("El texto ya tiene ese formato")
+                return
             replaced = self.atspi.replace_selection(self.selection_context, result)
             if not replaced:
                 QApplication.clipboard().setText(result)
                 self._show_toast("Resultado copiado; la app no permite reemplazo directo")
             else:
+                self.undo.remember(
+                    text,
+                    result,
+                    self.selection_context.application,
+                )
                 self._show_toast("Selección reemplazada")
             return
 
-        if cmd == "count":
-            words = len(text.split())
-            chars = len(text)
-            chars_no_spaces = len(
-                text.replace(" ", "")
-                .replace("\n", "")
-                .replace("\r", "")
-                .replace("\t", "")
+        if cmd.startswith("copy-transform:"):
+            operation = cmd.split(":", 1)[1]
+            try:
+                QApplication.clipboard().setText(transform_text(operation, text))
+                self._show_toast("Transformación copiada sin reemplazar")
+            except ValueError as exc:
+                QMessageBox.warning(None, "Transformación", str(exc))
+            return
+
+        if cmd in {"slugify", "clean-terminal"}:
+            result = slugify(text) if cmd == "slugify" else clean_terminal_text(text)
+            replaced = self.atspi.replace_selection(self.selection_context, result)
+            if replaced:
+                self.undo.remember(text, result, self.selection_context.application)
+                self._show_toast("Selección reemplazada")
+            else:
+                QApplication.clipboard().setText(result)
+                self._show_toast("Resultado copiado; la app no permite reemplazo directo")
+            return
+
+        if cmd in {"format-json", "minify-json"}:
+            try:
+                result = format_json(text, compact=cmd == "minify-json")
+            except (ValueError, TypeError, json.JSONDecodeError) as exc:
+                self.popup.show_inline_result("JSON inválido", str(exc))
+                return
+            if self.atspi.replace_selection(self.selection_context, result):
+                self.undo.remember(text, result, self.selection_context.application)
+                self._show_toast("JSON actualizado")
+            else:
+                QApplication.clipboard().setText(result)
+                self._show_toast("JSON copiado")
+            return
+
+        if cmd == "extract-entities":
+            rendered = extract_entities(text).render()
+            self.popup.show_inline_result(
+                "Datos detectados",
+                rendered or "No se detectaron enlaces, correos ni teléfonos.",
             )
-            stripped_lines = [line for line in text.splitlines() if line.strip()]
-            line_count = len(stripped_lines)
-            QMessageBox.information(
+            return
+
+        if cmd == "color-details":
+            try:
+                self.popup.show_inline_result("Conversión de color", color_details(text))
+            except ValueError as exc:
+                self.popup.show_inline_result("Color no compatible", str(exc))
+            return
+
+        if cmd == "compare-clipboard":
+            other = QApplication.clipboard().text()
+            try:
+                difference = compare_text(text, other)
+            except ValueError as exc:
+                self.popup.show_inline_result("Comparación", str(exc))
+                return
+            self.popup.show_inline_result(
+                "Diferencias",
+                difference or "La selección y el portapapeles son iguales.",
+            )
+            return
+
+        if cmd == "speak":
+            executable = next(
+                (name for name in ("spd-say", "espeak-ng", "espeak") if check_command(name)),
                 None,
-                "Contar",
-                f"Palabras: {words}\n"
-                f"Caracteres: {chars}\n"
-                f"Caracteres (sin espacios): {chars_no_spaces}\n"
-                f"Lineas (no vacias): {line_count}",
             )
+            if executable is None:
+                self._show_toast("No hay motor de voz instalado")
+                return
+            try:
+                subprocess.Popen([executable, text[:20_000]])
+                self._show_toast("Lectura iniciada")
+            except OSError as exc:
+                QMessageBox.warning(None, "Lectura en voz alta", str(exc))
+            return
+
+        if cmd == "count":
+            insight = text_statistics(text)
+            self.popup.show_inline_result(insight.title, insight.value, insight.detail)
+            return
+
+        if cmd == "insight":
+            insight = local_insight(text)
+            if insight is None:
+                self.popup.show_inline_result(
+                    "Sin resultado",
+                    "Usa una operación como 2 + 2 o una conversión como 10 km a mi.",
+                )
+            else:
+                self.popup.show_inline_result(
+                    insight.title, insight.value, insight.detail
+                )
+            return
+
+        if cmd == "grammar":
+            self._check_grammar(text)
+            return
+
+        if cmd == "undo":
+            record = self.undo.pop(self.selection_context.application)
+            if record is None:
+                self._show_toast("No hay cambios recientes para deshacer")
+                return
+            if self.atspi.replace_selection(self.selection_context, record.before):
+                self._show_toast("Cambio deshecho")
+            else:
+                QApplication.clipboard().setText(record.before)
+                self._show_toast("Texto anterior copiado; la selección cambió")
+            return
+
+        if cmd == "textpik-history":
+            self._show_private_history()
+            return
+
+        if cmd == "ocr-image":
+            self._run_ocr_image()
+            return
+
+        if cmd == "ocr-region":
+            self._run_ocr_region()
+            return
+
+        if cmd.startswith("automation:"):
+            self._run_automation(cmd.split(":", 1)[1], text)
+            return
+
+        if cmd.startswith("wasi:"):
+            relative = Path(cmd.split(":", 1)[1])
+            module = (EXTENSIONS_DIR / relative).resolve()
+            root = EXTENSIONS_DIR.resolve()
+            if root not in module.parents:
+                QMessageBox.warning(None, "Extensión WASI", "Ruta de módulo inválida")
+                return
+            timeout_ms = int((manifest or {}).get("timeout_ms", 2000))
+            worker = FunctionWorker(lambda: run_wasi(module, text, timeout_ms=timeout_ms))
+            worker.signals.succeeded.connect(
+                lambda result: self.popup.show_inline_result(
+                    manifest["name"] if manifest else "Extensión WASI",
+                    result,
+                )
+            )
+            worker.signals.failed.connect(
+                lambda message: QMessageBox.warning(None, "Extensión WASI", message)
+            )
+            self._start_worker(worker)
             return
 
         if cmd == "spellcheck":
@@ -4399,7 +6017,10 @@ class TextPikApp(QObject):
             return
         context = self.selection_context
         session_id = self._selection_session
-        languages = ("es_CL", "es_ES", "en_US")
+        languages = self.spelling.language_candidates(
+            text,
+            os.environ.get("LANG", "").split(".", 1)[0],
+        )
         self._show_toast("Revisando ortografía…")
         worker = FunctionWorker(lambda: self.spelling.suggest(word, languages))
         worker.signals.succeeded.connect(
@@ -4426,28 +6047,259 @@ class TextPikApp(QObject):
         if not result.misspelled:
             self._show_toast(f"“{result.word}” está correctamente escrita")
             return
-        from PySide6.QtWidgets import QInputDialog
-
-        replacement, accepted = QInputDialog.getItem(
-            None,
-            "Corrección ortográfica",
-            f"Sugerencias para “{result.word}”:",
-            list(result.suggestions),
-            0,
-            True,
-        )
-        replacement = replacement.strip()
-        if not accepted or not replacement:
+        dialog = QMessageBox(self.popup)
+        dialog.setWindowTitle("Corrección ortográfica")
+        dialog.setText(f"Sugerencias para “{result.word}”")
+        suggestion_buttons = {
+            dialog.addButton(value, QMessageBox.AcceptRole): value
+            for value in result.suggestions
+        }
+        ignore_button = dialog.addButton("Ignorar", QMessageBox.ActionRole)
+        add_button = dialog.addButton("Añadir al diccionario", QMessageBox.ActionRole)
+        dialog.addButton(QMessageBox.Cancel)
+        dialog.exec()
+        clicked = dialog.clickedButton()
+        if clicked is ignore_button:
+            self.spelling.ignore(result.word)
+            values = list(self.settings.get("spelling_ignored_words", []))
+            values.append(result.word.casefold())
+            self.settings["spelling_ignored_words"] = list(dict.fromkeys(values))[-500:]
+            self.save_settings()
+            self._show_toast("Palabra ignorada")
+            return
+        if clicked is add_button:
+            self.spelling.add(result.word, result.language)
+            values = list(self.settings.get("spelling_personal_words", []))
+            values.append(result.word.casefold())
+            self.settings["spelling_personal_words"] = list(dict.fromkeys(values))[-500:]
+            self.save_settings()
+            self._show_toast("Palabra añadida al diccionario personal")
+            return
+        replacement = suggestion_buttons.get(clicked, "").strip()
+        if not replacement:
             return
         if self._selection_session_is_current(session_id):
             replaced = self.atspi.replace_selection(context, replacement)
         else:
             replaced = False
         if replaced:
+            self.undo.remember(
+                result.word,
+                replacement,
+                context.application,
+            )
             self._show_toast("Corrección aplicada")
         else:
             QApplication.clipboard().setText(replacement)
             self._show_toast("Corrección copiada; la selección ya no está disponible")
+
+    def _load_automations(self):
+        if not AUTOMATIONS_FILE.exists():
+            return []
+        try:
+            payload = read_json(AUTOMATIONS_FILE)
+        except (OSError, ValueError):
+            logger.warning("No se pudieron cargar automatizaciones", exc_info=True)
+            return []
+        flows = payload.get("automations", []) if isinstance(payload, dict) else []
+        accepted = []
+        for flow in flows[:64] if isinstance(flows, list) else []:
+            if not isinstance(flow, dict):
+                continue
+            identifier = str(flow.get("id", ""))[:80]
+            name = str(flow.get("name", ""))[:120]
+            if identifier and name and isinstance(flow.get("steps"), list):
+                accepted.append(dict(flow, id=identifier, name=name))
+        return accepted
+
+    def _run_automation(self, identifier, text):
+        flow = next((item for item in self.automations if item["id"] == identifier), None)
+        if flow is None or not automation_matches(flow, self.selection_context, self._last_text_types):
+            self._show_toast("La automatización no coincide con este contexto")
+            return
+        try:
+            preview = preview_automation(flow, text)
+        except ValueError as exc:
+            QMessageBox.warning(None, "Automatización inválida", str(exc))
+            return
+        answer = QMessageBox.question(
+            None,
+            flow["name"],
+            f"Vista previa:\n\n{preview.before[:500]}\n\n→\n\n{preview.after[:500]}\n\n¿Aplicar?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        if self.atspi.replace_selection(self.selection_context, preview.after):
+            self.undo.remember(
+                preview.before,
+                preview.after,
+                self.selection_context.application,
+            )
+            self._show_toast("Automatización aplicada")
+        else:
+            QApplication.clipboard().setText(preview.after)
+            self._show_toast("Resultado de automatización copiado")
+
+    def _show_private_history(self):
+        from PySide6.QtWidgets import QInputDialog
+
+        try:
+            entries = self.history.load()
+        except (OSError, ValueError, ImportError):
+            entries = []
+        if not entries:
+            self.popup.show_inline_result(
+                "Historial privado",
+                "Está vacío o desactivado en Configuración.",
+            )
+            return
+        labels = [entry.text.replace("\n", " ")[:120] for entry in entries]
+        selected, accepted = QInputDialog.getItem(
+            None, "Historial privado", "Copiar elemento:", labels, 0, False
+        )
+        if accepted:
+            index = labels.index(selected)
+            QApplication.clipboard().setText(entries[index].text)
+            self._show_toast("Elemento del historial copiado")
+
+    def _run_ocr_image(self):
+        if not shutil.which("tesseract"):
+            self.popup.show_inline_result(
+                "OCR no disponible",
+                "Instala Tesseract; TextPik lo ejecuta únicamente bajo demanda.",
+            )
+            return
+        filename, _selected_filter = QFileDialog.getOpenFileName(
+            None,
+            "Seleccionar imagen para OCR",
+            str(Path.home()),
+            "Imágenes (*.png *.jpg *.jpeg *.webp *.tif *.tiff *.bmp)",
+        )
+        if not filename:
+            return
+        self._show_toast("Reconociendo texto localmente…")
+        capabilities = self._runtime_snapshot.get("capabilities")
+        languages = "+".join(capabilities.ocr_languages) if capabilities else "eng"
+        worker = FunctionWorker(
+            lambda: self.ocr.recognize(Path(filename), languages=languages)
+        )
+        worker.signals.succeeded.connect(self._show_ocr_result)
+        worker.signals.failed.connect(
+            lambda message: QMessageBox.warning(None, "OCR", message)
+        )
+        self._start_worker(worker)
+
+    def _show_ocr_result(self, response):
+        if not response.text:
+            self.popup.show_inline_result("OCR", "No se detectó texto")
+            return
+        QApplication.clipboard().setText(response.text)
+        self.popup.show_inline_result(
+            "OCR local",
+            response.text[:500],
+            "Resultado completo copiado al portapapeles",
+        )
+
+    def _run_ocr_region(self):
+        if not shutil.which("tesseract"):
+            self.popup.show_inline_result("OCR", "Tesseract no está instalado")
+            return
+
+        portal_available = (
+            "org.freedesktop.portal.Desktop" in self._desktop_dbus_services()
+        )
+
+        def capture_and_recognize():
+            with tempfile.TemporaryDirectory(prefix="textpik-ocr-") as temporary:
+                target = Path(temporary) / "region.png"
+                if shutil.which("spectacle"):
+                    command = ["spectacle", "-r", "-b", "-n", "-o", str(target)]
+                    subprocess.run(command, timeout=90, check=True)
+                elif shutil.which("gnome-screenshot"):
+                    command = ["gnome-screenshot", "-a", "-f", str(target)]
+                    subprocess.run(command, timeout=90, check=True)
+                elif shutil.which("slurp") and shutil.which("grim"):
+                    region = subprocess.run(
+                        ["slurp"], capture_output=True, text=True, timeout=90, check=True
+                    ).stdout.strip()
+                    if not region:
+                        raise RuntimeError("Selección de región cancelada")
+                    subprocess.run(
+                        ["grim", "-g", region, str(target)], timeout=20, check=True
+                    )
+                elif portal_available:
+                    capture_xdg_screenshot(target, timeout_seconds=90)
+                else:
+                    raise RuntimeError(
+                        "No hay adaptador de captura: instala Spectacle, "
+                        "gnome-screenshot, grim+slurp o XDG Screenshot Portal"
+                    )
+                capabilities = self._runtime_snapshot.get("capabilities")
+                languages = (
+                    "+".join(capabilities.ocr_languages) if capabilities else "eng"
+                )
+                return self.ocr.recognize(target, languages=languages)
+
+        self._show_toast("Selecciona una región para OCR…")
+        worker = FunctionWorker(capture_and_recognize)
+        worker.signals.succeeded.connect(self._show_ocr_result)
+        worker.signals.failed.connect(
+            lambda message: QMessageBox.warning(None, "OCR de región", message)
+        )
+        self._start_worker(worker)
+
+    def _check_grammar(self, text):
+        if not text.strip():
+            return
+        context = self.selection_context
+        session_id = self._selection_session
+        self._show_toast("Revisando gramática con LanguageTool…")
+        worker = FunctionWorker(lambda: self.grammar.check(text, "auto"))
+        worker.signals.succeeded.connect(
+            lambda suggestions: self._show_grammar_result(
+                text, suggestions, context, session_id
+            )
+        )
+        worker.signals.failed.connect(
+            lambda message: self.popup.show_inline_result(
+                "LanguageTool no disponible",
+                "Inicia el servidor local en 127.0.0.1:8010.",
+                message,
+            )
+        )
+        self._start_worker(worker)
+
+    def _show_grammar_result(self, text, suggestions, context, session_id):
+        if not suggestions:
+            self.popup.show_inline_result("Gramática", "No se encontraron problemas")
+            return
+        corrected = apply_suggestions(text, suggestions)
+        answer = QMessageBox.question(
+            None,
+            "Revisión gramatical",
+            f"Se encontraron {len(suggestions)} sugerencias. ¿Aplicar todas?\n\n"
+            f"Antes:\n{text[:500]}\n\nDespués:\n{corrected[:500]}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            self.popup.show_inline_result(
+                "Gramática",
+                f"{len(suggestions)} sugerencias disponibles",
+                suggestions[0].message,
+            )
+            return
+        replaced = self._selection_session_is_current(session_id) and self.atspi.replace_selection(
+            context, corrected
+        )
+        if replaced:
+            self.undo.remember(text, corrected, context.application)
+            self._show_toast("Correcciones aplicadas")
+        else:
+            QApplication.clipboard().setText(corrected)
+            self._show_toast("Texto corregido copiado; la selección cambió")
 
     def _authorize_action(self, action):
         action_id = action.get("id", action.get("cmd", "unknown"))
@@ -4516,31 +6368,42 @@ class TextPikApp(QObject):
             )
             return
 
-        model = "llama3"
-        import urllib.request
+        from PySide6.QtWidgets import QInputDialog
 
-        payload = json.dumps(
-            {
-                "model": model,
-                "prompt": text,
-                "stream": False,
-            }
-        ).encode()
-
-        def task():
-            req = urllib.request.Request(
-                "http://localhost:11434/api/generate",
-                data=payload,
-                headers={"Content-Type": "application/json"},
+        labels = {
+            "Reescribir": "rewrite",
+            "Resumir": "summarize",
+            "Simplificar": "simplify",
+            "Extraer tareas": "tasks",
+            "Explicar": "explain",
+        }
+        label, accepted = QInputDialog.getItem(
+            None, "Ollama local", "Tarea:", list(labels), 0, False
+        )
+        if not accepted:
+            return
+        capabilities = self._runtime_snapshot.get("capabilities")
+        model = capabilities.ollama_model if capabilities else ""
+        if not model:
+            QMessageBox.information(
+                None,
+                "Ollama no está listo",
+                "Inicia el servicio de Ollama e instala al menos un modelo.",
             )
-            with urllib.request.urlopen(req, timeout=120) as resp:
-                result = json.loads(resp.read())
-            return result.get("response", json.dumps(result, indent=2))
+            self._last_capability_probe_at = 0.0
+            self._schedule_runtime_probe()
+            return
 
         self._show_toast("Consultando Ollama…")
-        worker = FunctionWorker(task)
+        worker = FunctionWorker(
+            lambda: self.ollama.generate(
+                text,
+                task=labels[label],
+                model=model,
+            )
+        )
         worker.signals.succeeded.connect(
-            lambda response: self.show_ollama_response(model, response)
+            lambda response: self.show_ollama_response(model, response.text)
         )
         worker.signals.failed.connect(
             lambda message: QMessageBox.warning(None, "Error de Ollama", message)
@@ -4688,7 +6551,7 @@ class TextPikApp(QObject):
 
     def _klipper_save(self, text):
         try:
-            from PySide6.QtDBus import QDBusConnection, QDBusInterface
+            from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 
             bus = QDBusConnection.sessionBus()
             iface = QDBusInterface(
@@ -4697,7 +6560,9 @@ class TextPikApp(QObject):
                 "org.kde.klipper.klipper",
                 bus,
             )
-            iface.call("setClipboardContents", text)
+            reply = iface.call("setClipboardContents", text)
+            if reply.type() == QDBusMessage.MessageType.ErrorMessage:
+                raise RuntimeError(reply.errorMessage() or "Klipper rechazó el texto")
             self._show_toast("Guardado en Klipper")
         except Exception as exc:
             QMessageBox.warning(
@@ -4708,7 +6573,7 @@ class TextPikApp(QObject):
 
     def _klipper_show_menu(self):
         try:
-            from PySide6.QtDBus import QDBusConnection, QDBusInterface
+            from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 
             bus = QDBusConnection.sessionBus()
             iface = QDBusInterface(
@@ -4717,7 +6582,10 @@ class TextPikApp(QObject):
                 "org.kde.klipper.klipper",
                 bus,
             )
-            iface.call("showKlipperManuallyInvokeActionMenu")
+            reply = iface.call("showKlipperPopupMenu")
+            if reply.type() == QDBusMessage.MessageType.ErrorMessage:
+                raise RuntimeError(reply.errorMessage() or "Klipper rechazó la solicitud")
+            self._show_toast("Historial de Klipper abierto")
         except Exception as exc:
             QMessageBox.warning(
                 None,
@@ -4913,7 +6781,16 @@ exec bash -i
             "klipper": "org.kde.klipper" in services,
             "kdeconnect": (
                 check_command("kdeconnect-cli")
-                or "org.kde.kdeconnect" in services
+                or bool(
+                    {"org.kde.kdeconnect", "org.gnome.Shell.Extensions.GSConnect"}
+                    & services
+                )
+            ),
+            "xdg_desktop_portal": "org.freedesktop.portal.Desktop" in services,
+            "secret_service": "org.freedesktop.secrets" in services,
+            "anchor_provider": getattr(self, "_last_anchor_decision", "unknown"),
+            "previous_run_unclean": bool(
+                getattr(getattr(self, "previous_run", None), "unclean", False)
             ),
             "selection_session": self._selection_session,
             "popup_phase": self.popup_state.phase.value,
@@ -5062,6 +6939,11 @@ exec bash -i
             self.atspi.close()
         if hasattr(self, "monitor"):
             self.monitor.pause()
+        if (
+            hasattr(self, "popup")
+            and getattr(self.popup, "result_popup", None) is not None
+        ):
+            self.popup.result_popup.close()
         if hasattr(self, "thread_pool"):
             self.thread_pool.clear()
             workers_done = self.thread_pool.waitForDone(3000)
@@ -5089,6 +6971,24 @@ exec bash -i
 
 
 def main(argv):
+    if len(argv) >= 2 and argv[1] in {"--version", "version"}:
+        print(f"TextPik {APP_VERSION}")
+        return 0
+    if len(argv) >= 2 and argv[1] in {"--self-check", "--self-check-gui"}:
+        # Headless package checks do not run an accessibility bus. Avoid AT-SPI
+        # attempting to abort before the offscreen Qt platform can initialize.
+        os.environ.setdefault("NO_AT_BRIDGE", "1")
+        checks = {
+            "version": APP_VERSION,
+            "actions": ACTIONS_ASSETS_DIR.is_dir(),
+            "application_icon": APP_ICON_FILE.is_file(),
+            "qt_dbus": qt_dbus_available(),
+        }
+        if argv[1] == "--self-check-gui":
+            probe_app = QApplication.instance() or QApplication([])
+            checks["qt_platform"] = bool(probe_app.platformName())
+        print(json.dumps(checks, ensure_ascii=False, sort_keys=True))
+        return 0 if all(value for key, value in checks.items() if key != "version") else 1
     if len(argv) >= 2 and argv[1] == "run":
         settings = load_settings()
         setup_logging(settings)

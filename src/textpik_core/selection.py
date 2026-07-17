@@ -10,6 +10,7 @@ FILE_MANAGERS = ("dolphin", "nautilus", "nemo", "thunar", "pcmanfm", "caja")
 TEXT_ROLES = ("text", "entry", "paragraph", "document", "terminal")
 FILE_ROLES = ("icon", "list item", "tree item", "table cell")
 NON_TEXT_ROLES = (
+    "menu",
     "menu item",
     "push button",
     "check box",
@@ -24,6 +25,37 @@ class SelectionIntent:
     allowed: bool
     reason: str = ""
     confidence: float = 0.0
+
+
+def adaptive_selection_delay(
+    context: SelectionContext,
+    text: str,
+    *,
+    base_ms: int = 70,
+    recent_changes: int = 1,
+) -> int:
+    """Return a small stabilization delay using metadata, never selected content."""
+    delay = max(30, min(250, int(base_ms)))
+    changes = max(1, min(5, int(recent_changes)))
+    delay += (changes - 1) * 18
+    app = context.application.casefold()
+    role = context.role.casefold()
+    if any(name in app for name in FILE_MANAGERS):
+        delay += 45
+    if "terminal" in role or "terminal" in app:
+        delay += 20
+    if context.editable and any(name in role for name in TEXT_ROLES):
+        delay -= 15
+    length = len(str(text or ""))
+    if length == 1:
+        delay += 35
+    elif length <= 64 and not any(char.isspace() for char in str(text).strip()):
+        # Browsers commonly select the word below a secondary click before
+        # exposing their context menu. A short grace lets focus metadata settle.
+        delay += 55
+    elif length > 2000:
+        delay += 25
+    return max(30, min(250, delay))
 
 
 def is_file_workspace_selection(context: SelectionContext, text: str) -> bool:
@@ -61,6 +93,9 @@ def evaluate_selection_intent(
         return SelectionIntent(False, "non-text-control", 0.0)
     if ignore_files and is_file_workspace_selection(context, value):
         return SelectionIntent(False, "file-selection", 0.0)
+    if context.selection_start is not None and context.selection_end is not None:
+        if context.selection_start == context.selection_end:
+            return SelectionIntent(False, "collapsed-selection", 0.0)
 
     confidence = 0.66
     if context.application:

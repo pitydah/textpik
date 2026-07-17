@@ -29,6 +29,16 @@ Popup placement scores at most five candidates. It heavily penalizes covering
 the selection or cursor, then considers edge clamping and distance. This keeps
 placement stable and constant-time near monitor edges.
 
+`textpik_core.interaction` owns modifier resolution and bounded one/two-row
+composition. `textpik_core.utilities` contains dependency-free local actions,
+while `textpik_core.health` persists only process metadata required to detect an
+unclean shutdown. None imports Qt or probes the desktop.
+
+Adaptive delay is calculated from application, role, editability, selection
+length and event churn. Automation regex conditions reject backreferences,
+lookarounds and nested quantified groups, and output is capped at one million
+characters.
+
 Persisted defaults, bounds and migrations live in `textpik_core.settings`.
 Toolkit-specific color validation is injected by the Qt boundary, so loading or
 testing the settings schema never initializes a graphical runtime.
@@ -61,6 +71,11 @@ Qt, AT-SPI, D-Bus, compositor commands and network providers belong behind
 adapters. Optional providers such as LanguageTool, OCR or local AI must be
 discovered and invoked on demand; they must never become resident dependencies
 of the core process.
+
+Region OCR tries native desktop capture tools first and then the XDG Screenshot
+portal. The portal adapter is imported only for the explicit action, subscribes
+to the predictable request path before calling D-Bus, accepts only a successful
+local `file://` result and copies it into TextPik's private temporary directory.
 
 The spelling contract follows that rule: it accepts an injected dictionary,
 loads the optional system provider only on the first explicit spelling request,

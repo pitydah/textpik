@@ -21,7 +21,10 @@ function onClientActivated(client) {
     // Cuando el usuario activa otra ventana (clic fuera del popup),
     // notificamos a TextPik para que cierre el popup.
     // El popup de TextPik es override-redirect, no aparece como client.
-    if (client) {
+    // A null activation is how Plasma can represent a desktop/background
+    // click. It is external too; the app ignores the signal when no popup is
+    // visible.
+    if (!client || !identifyTextPik(client)) {
         callDBus(
             service,
             path,
@@ -50,13 +53,26 @@ function keepTextPikOutOfTaskManager(window) {
     window.keepAbove = true;
 }
 
-workspace.cursorPosChanged.connect(sendCursorPos);
-workspace.clientActivated.connect(onClientActivated);
+// KWin 6 renamed the client-oriented API to window-oriented signals. Keep the
+// guarded legacy branch so the same package remains usable on Plasma 5.
+if (workspace.cursorPosChanged) {
+    workspace.cursorPosChanged.connect(sendCursorPos);
+}
+if (workspace.windowActivated) {
+    workspace.windowActivated.connect(onClientActivated);
+} else if (workspace.clientActivated) {
+    workspace.clientActivated.connect(onClientActivated);
+}
 if (workspace.windowAdded) {
     workspace.windowAdded.connect(keepTextPikOutOfTaskManager);
+} else if (workspace.clientAdded) {
+    workspace.clientAdded.connect(keepTextPikOutOfTaskManager);
 }
-if (workspace.windowList) {
-    workspace.windowList().forEach(keepTextPikOutOfTaskManager);
+const existingWindows = workspace.stackingOrder ||
+    (workspace.windowList ? workspace.windowList() :
+        (workspace.clientList ? workspace.clientList() : []));
+if (existingWindows && existingWindows.forEach) {
+    existingWindows.forEach(keepTextPikOutOfTaskManager);
 }
 sendCursorPos();
 if (typeof setInterval === "function") {

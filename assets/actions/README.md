@@ -13,9 +13,9 @@ monochrome layer. TextPik recolors that layer at runtime to maintain contrast.
 - No embedded background, shadow, CSS dependency, font or external resource.
 
 Utility pictograms are original TextPik artwork. Google, Google Maps, YouTube,
-ChatGPT/OpenAI, DeepSeek, DuckDuckGo and Ollama marks identify the destination
-of their respective actions and remain trademarks of their owners. Their use
-does not imply affiliation or endorsement.
+ChatGPT/OpenAI, DeepSeek, Claude/Anthropic, Gemini/Google, DuckDuckGo and Ollama
+marks identify the destination of their respective actions and remain
+trademarks of their owners. Their use does not imply affiliation or endorsement.
 
 The `-black` and `-white` files are retained for compatibility with older
 TextPik installations. Current versions use the unsuffixed master and apply

@@ -4,7 +4,6 @@ set -euo pipefail
 APP_NAME="textpik"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUN_SCRIPT="$SCRIPT_DIR/run.sh"
 BIN_DIR="$HOME/.local/bin"
 BIN_PATH="$BIN_DIR/$APP_NAME"
 APP_DIR="$HOME/.local/share/$APP_NAME"
@@ -13,6 +12,7 @@ KWIN_SCRIPT_SOURCE="$APP_DIR/kwin/textpik-cursor-bridge"
 KWIN_SCRIPT_DEST="$HOME/.local/share/kwin/scripts/textpik-cursor-bridge"
 
 MISSING=()
+RUNTIME_PYTHON="python3"
 
 info()  { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 ok()    { printf "\033[1;32m  OK\033[0m  %s\n" "$*"; }
@@ -32,15 +32,23 @@ command -v sudo &>/dev/null && HAS_SUDO=true
 pkg_install() {
     local pkgs=("$@")
     [[ ${#pkgs[@]} -eq 0 ]] && return 0
-    if $HAS_SUDO; then
+    local privileged=()
+    if [[ "$EUID" -eq 0 ]]; then
+        privileged=()
+    elif $HAS_SUDO; then
+        privileged=(sudo)
+    else
+        privileged=()
+    fi
+    if [[ "$EUID" -eq 0 ]] || $HAS_SUDO; then
         case "$PM" in
-            pacman) sudo pacman -S --needed --noconfirm "${pkgs[@]}" 2>/dev/null ;;
-            apt)    sudo apt install -y "${pkgs[@]}" 2>/dev/null ;;
-            dnf)    sudo dnf install -y "${pkgs[@]}" 2>/dev/null ;;
-            zypper) sudo zypper install -y "${pkgs[@]}" 2>/dev/null ;;
-            apk) sudo apk add "${pkgs[@]}" 2>/dev/null ;;
-            xbps-install) sudo xbps-install -Sy "${pkgs[@]}" 2>/dev/null ;;
-            slackpkg) sudo slackpkg install "${pkgs[@]}" 2>/dev/null ;;
+            pacman) "${privileged[@]}" pacman -S --needed --noconfirm "${pkgs[@]}" 2>/dev/null ;;
+            apt)    "${privileged[@]}" apt install -y "${pkgs[@]}" 2>/dev/null ;;
+            dnf)    "${privileged[@]}" dnf install -y "${pkgs[@]}" 2>/dev/null ;;
+            zypper) "${privileged[@]}" zypper install -y "${pkgs[@]}" 2>/dev/null ;;
+            apk) "${privileged[@]}" apk add "${pkgs[@]}" 2>/dev/null ;;
+            xbps-install) "${privileged[@]}" xbps-install -Sy "${pkgs[@]}" 2>/dev/null ;;
+            slackpkg) "${privileged[@]}" slackpkg install "${pkgs[@]}" 2>/dev/null ;;
         esac
     else
         warn "Sin sudo. Instalacion manual:"
@@ -76,7 +84,7 @@ install_pyside6() {
         zypper) try_install "PySide6" python3-pyside6 ;;
         apk) try_install "PySide6" py3-pyside6 ;;
         xbps-install) try_install "PySide6" python3-PySide6 ;;
-        slackpkg) warn "Slackware: PySide6 se instalara mediante pip si falta." ;;
+        slackpkg) warn "Slackware: PySide6 se instalará en un entorno privado." ;;
         apt)
             if pkg_install python3-pyside6 && python3 -c "import PySide6" &>/dev/null; then
                 ok "PySide6"; return 0
@@ -85,18 +93,26 @@ install_pyside6() {
                 && python3 -c "import PySide6" &>/dev/null; then
                 ok "PySide6 (modular)"; return 0
             fi
-            warn "PySide6 no disponible via apt. Probando pip."
+            warn "PySide6 no disponible vía apt. Creando un entorno privado."
             ;;
-        *) warn "Gestor desconocido. Probando pip." ;;
+        *) warn "Gestor desconocido. Creando un entorno privado." ;;
     esac
 
     if python3 -c "import PySide6" &>/dev/null; then return 0; fi
 
-    info "Instalando PySide6 via pip..."
-    python3 -m pip install --user PySide6 2>/dev/null || {
-        warn "PySide6 no se pudo instalar. Instalalo manualmente."
-        MISSING+=("PySide6 (pip)")
-    }
+    info "Instalando PySide6 en $APP_DIR/venv..."
+    if ! python3 -m venv "$APP_DIR/venv" 2>/dev/null; then
+        [[ "$PM" == "apt" ]] && pkg_install python3-venv || true
+        python3 -m venv "$APP_DIR/venv"
+    fi
+    if "$APP_DIR/venv/bin/pip" install "PySide6>=6.5,<6.12"; then
+        RUNTIME_PYTHON="$APP_DIR/venv/bin/python"
+        ok "PySide6 (entorno privado)"
+    else
+        warn "PySide6 no se pudo instalar. Instálalo manualmente."
+        MISSING+=("PySide6 (venv)")
+        return 1
+    fi
 }
 
 install_required_deps() {
@@ -178,10 +194,13 @@ install_binary() {
     cp -a "$PROJECT_DIR/assets" "$APP_DIR/assets"
     cp -a "$PROJECT_DIR/kwin" "$APP_DIR/kwin"
     cp "$PROJECT_DIR/LICENSE" "$PROJECT_DIR/README.md" "$APP_DIR/"
+}
+
+install_launcher() {
     mkdir -p "$BIN_DIR"
     cat > "$BIN_PATH" << SCRIPT
 #!/usr/bin/env bash
-exec python3 "$APP_DIR/src/textpik.py" "\$@"
+exec "$RUNTIME_PYTHON" "$APP_DIR/src/textpik.py" "\$@"
 SCRIPT
     chmod +x "$BIN_PATH"
     ok "Comando instalado: $BIN_PATH"
@@ -238,10 +257,27 @@ install_kwin_bridge() {
     cp -a "$KWIN_SCRIPT_SOURCE/." "$KWIN_SCRIPT_DEST/"
     ok "KWin bridge copiado"
 
-    if command -v qdbus &>/dev/null; then
-        if qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \
-            "textpik-cursor-bridge" 2>/dev/null && \
-           qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.start 2>/dev/null; then
+    local qdbus_command=""
+    if command -v qdbus6 &>/dev/null; then
+        qdbus_command="qdbus6"
+    elif command -v qdbus &>/dev/null; then
+        qdbus_command="qdbus"
+    fi
+    if [[ -n "$qdbus_command" ]]; then
+        command -v kwriteconfig6 &>/dev/null && \
+            kwriteconfig6 --file kwinrc --group Plugins \
+                --key textpik-cursor-bridgeEnabled true
+        "$qdbus_command" org.kde.KWin /Scripting \
+            org.kde.kwin.Scripting.unloadScript \
+            "textpik-cursor-bridge" 2>/dev/null || true
+        local script_id
+        script_id=$("$qdbus_command" org.kde.KWin /Scripting \
+            org.kde.kwin.Scripting.loadScript \
+            "$KWIN_SCRIPT_DEST/contents/code/main.js" \
+            "textpik-cursor-bridge" 2>/dev/null || true)
+        if [[ "$script_id" =~ ^[0-9]+$ ]] && \
+           "$qdbus_command" org.kde.KWin "/Scripting/Script${script_id}" \
+            org.kde.kwin.Script.run 2>/dev/null; then
             ok "KWin bridge activado"
         else
             info "No se pudo activar automaticamente."
@@ -258,11 +294,11 @@ install_kwin_bridge() {
 main() {
     info "Instalando TextPik para escritorios Linux..."
 
-    chmod +x "$RUN_SCRIPT"
     install_required_deps
     install_optional_deps
-    install_pyside6
     install_binary
+    install_pyside6
+    install_launcher
     install_desktop_entry
     install_autostart
     install_kwin_bridge
