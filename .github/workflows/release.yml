@@ -59,7 +59,7 @@ jobs:
           sha256sum * > SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Sign build provenance with Sigstore
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-path: dist/*
       - name: Publish GitHub release
