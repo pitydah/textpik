@@ -2,9 +2,26 @@
 
 ## Unreleased
 
+- Orden manual estricto como comportamiento predeterminado y modo adaptativo
+  explícitamente opcional, sin alterar la secuencia establecida por el usuario.
+- Modo programador con perfil editable por IDE/aplicación y tipo de contenido,
+  orden propio y acciones locales para JWT, SHA-256, cadenas JSON y bloques de código.
+- Perfiles contextuales con múltiples aplicaciones, reordenación interna de
+  acciones, duplicado y prioridad libre mediante arrastrar y soltar.
+- Centro de integraciones ampliado para configurar Ollama, LanguageTool, OCR,
+  reproductor multimedia, terminal, KDE Connect y síntesis de voz; todas las
+  preferencias se validan, persisten y se aplican en sus acciones reales.
+- Descubrimiento asíncrono y verificación de modelos, idiomas, móviles,
+  impresoras y aplicaciones; navegador, traducción, diccionario, captura OCR y
+  backend de portapapeles configurables, con disponibilidad contextual exacta.
+- Credenciales torrent protegidas con Secret Service y prueba no destructiva de
+  conexión para qBittorrent, Transmission y plantillas de userscript.
 - Acciones contextuales para abrir magnet con el cliente torrent predeterminado,
   enviarlos a servidores Transmission/qBittorrent configurables y reproducir
   URLs multimedia con la aplicación local predeterminada o un fallback conocido.
+- Flujos torrent por destino con carpeta, etiquetas, pausa, modo secuencial,
+  selección preguntar/predeterminado/todos e importación segura de metadatos
+  userscript para delegar la automatización al navegador.
 - Ciclo determinista del popup: permanece ocho segundos sin interacción, un clic
   externo confirmado lo cierra de inmediato incluso durante la inmunidad inicial,
   y los vaciados transitorios de PRIMARY nunca adelantan su cierre. El posicionador

@@ -163,13 +163,69 @@ monitoring uses X11 PRIMARY or the standard Wayland `wl-clipboard` protocol.
 
 - **Abrir magnet en cliente torrent** usa la asociación estándar
   `x-scheme-handler/magnet`, respetando el cliente predeterminado del escritorio.
-- **Enviar magnet a servidor** admite Transmission RPC y qBittorrent Web API.
-  Los servidores se administran en **Configuración → Integraciones**.
+- **Enviar magnet a servidor** admite Transmission RPC, qBittorrent Web API y
+  flujos controlados por un userscript instalado en el navegador. Cada destino
+  puede definir carpeta, categoría, etiquetas, inicio pausado y descarga
+  secuencial; el enrutamiento puede preguntar, usar el predeterminado o enviar
+  a todos. Se administra en **Configuración → Integraciones**.
 - **Abrir en reproductor local** usa primero la aplicación predeterminada para
   vídeo y degrada a MPV, VLC, Celluloid, Haruna o SMPlayer cuando es necesario.
 
 Las solicitudes de red se ejecutan fuera del hilo gráfico, tienen tiempo límite
 y solo se realizan al invocar explícitamente una acción.
+
+## Orden manual, perfiles y modo programador
+
+- El orden manual es el comportamiento predeterminado: la barra conserva
+  exactamente la secuencia definida en **Configuración → Acciones**.
+- El modo adaptativo es opcional. Al activarlo puede reducir la barra u omitir
+  selecciones de baja confianza, pero nunca reordena silenciosamente las acciones.
+- Cada perfil contextual permite varias aplicaciones, tipos de texto, selección
+  de acciones y un orden propio mediante arrastrar y soltar. Los perfiles también
+  se pueden duplicar, editar, eliminar y cambiar de prioridad.
+- **Modo programador** incluye un perfil editable para editores, IDE y terminales,
+  además de contextos de código, JSON, JWT, errores, rutas, hashes e IP.
+- Sus acciones locales incluyen formatear/minificar JSON, decodificar JWT sin
+  verificar la firma, calcular SHA-256, escapar cadenas JSON, crear bloques de
+  código, comparar con el portapapeles y limpiar salida de terminal.
+
+La pestaña **Configuración → Integraciones** también permite dirigir las
+acciones que antes dependían únicamente de autodetección:
+
+- endpoint local y modelo preferido de Ollama;
+- endpoint e idioma de LanguageTool, además del diccionario ortográfico;
+- reproductor multimedia y emulador de terminal preferidos;
+- dispositivo específico de KDE Connect;
+- idiomas de Tesseract (`spa`, `eng` o `spa+eng`);
+- motor de síntesis de voz, capturador de pantalla e impresora;
+- navegador preferido e idioma de destino para traducción;
+- Klipper o el historial privado de TextPik como backend del portapapeles.
+
+Los botones **Verificar** consultan modelos, idiomas, aplicaciones, móviles e
+impresoras fuera del hilo de la interfaz. Las opciones ausentes quedan señaladas
+y las acciones no se ofrecen cuando su integración configurada no está lista.
+Las contraseñas de servidores torrent se guardan en Secret Service/KWallet o
+GNOME Keyring mediante `secret-tool`; el JSON privado con permisos `0600` queda
+como compatibilidad únicamente cuando ese servicio no existe.
+
+La opción «Detectar automáticamente» mantiene el comportamiento portátil y
+ligero. Las preferencias explícitas evitan usar una aplicación, modelo o
+dispositivo distinto al elegido por el usuario.
+
+Para integrar Tampermonkey/Greasemonkey sin ejecutar JavaScript dentro de
+TextPik, el encabezado del userscript puede declarar una URL de entrada:
+
+```javascript
+// ==UserScript==
+// @name         Importar magnet en mi NAS
+// @match        https://nas.local/torrents/*
+// @textpik-url  https://nas.local/torrents/add?magnet={magnet}&hash={hash}&name={name}
+// ==/UserScript==
+```
+
+Al importar el `.user.js`, TextPik solo lee ese encabezado. Al ejecutar la
+acción abre una URL HTTP(S) con los valores codificados; el userscript debe
+estar instalado y permanece bajo el modelo de seguridad del navegador.
 
 ## Packaging
 
