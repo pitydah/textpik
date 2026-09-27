@@ -13,17 +13,25 @@ class ContextProfile:
     name: str
     application: str
     text_types: frozenset[str]
-    action_ids: frozenset[str]
+    action_ids: tuple[str, ...]
+    mode: str = "custom"
+    applications: tuple[str, ...] = ()
 
     def matches(self, snapshot: ContextSnapshot) -> bool:
-        application_matches = (
-            not self.application
-            or self.application.casefold() in snapshot.application.casefold()
+        application_rules = self.applications or ((self.application,) if self.application else ())
+        application_matches = any(
+            value.casefold() in snapshot.application.casefold()
+            for value in application_rules
         )
-        type_matches = not self.text_types or bool(
+        type_matches = bool(
             self.text_types.intersection(snapshot.text_types)
         )
-        return application_matches and type_matches
+        if self.mode == "developer":
+            return application_matches or type_matches
+        return (
+            (not application_rules or application_matches)
+            and (not self.text_types or type_matches)
+        )
 
 
 def normalize_profiles(raw_profiles) -> list[dict]:
@@ -36,16 +44,22 @@ def normalize_profiles(raw_profiles) -> list[dict]:
             continue
         name = str(raw.get("name", "")).strip()[:64]
         application = str(raw.get("application", "")).strip()[:128]
+        applications = _unique_strings(raw.get("applications", ()), 24)
+        if application and application not in applications:
+            applications.insert(0, application)
         text_types = _unique_strings(raw.get("text_types", ()), 12)
         action_ids = _unique_strings(raw.get("action_ids", ()), 64)
-        if not name or not action_ids or (not application and not text_types):
+        mode = "developer" if raw.get("mode") == "developer" else "custom"
+        if not name or not action_ids or (not applications and not text_types):
             continue
         normalized.append(
             {
                 "name": name,
                 "application": application,
+                "applications": applications,
                 "text_types": text_types,
                 "action_ids": action_ids,
+                "mode": mode,
             }
         )
     return normalized
@@ -60,7 +74,9 @@ def resolve_profile(
             raw["name"],
             raw["application"],
             frozenset(raw["text_types"]),
-            frozenset(raw["action_ids"]),
+            tuple(raw["action_ids"]),
+            raw["mode"],
+            tuple(raw["applications"]),
         )
         if profile.matches(snapshot):
             return profile

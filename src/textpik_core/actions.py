@@ -19,6 +19,7 @@ TRANSFORMS = {
     "normalize-spaces", "title-case", "quote-text", "bullet-list",
     "sort-lines", "unique-lines", "url-encode", "url-decode",
     "base64-encode", "base64-decode", "html-escape", "html-unescape",
+    "json-string-escape", "code-fence",
 }
 KNOWN_PERMISSIONS = {"clipboard", "network", "process", "filesystem", "accessibility"}
 DEFAULT_PRIORITIES = {
@@ -125,6 +126,11 @@ def fuzzy_score(query: str, candidate: str) -> int | None:
 
 def infer_category(name: str, command: str) -> str:
     lowered = f"{name} {command}".casefold()
+    if command in {
+        "format-json", "minify-json", "decode-jwt", "sha256",
+        "json-string-escape", "code-fence", "clean-terminal",
+    }:
+        return "Programación"
     if command in {"copy", "cut", "paste", "klipper-save", "klipper-menu"}:
         return "Portapapeles"
     if command in TRANSFORMS or command in {
@@ -276,6 +282,16 @@ def transform_text(command: str, text: str) -> str:
                 value = value[len(opening) : -len(closing)].strip()
                 break
         return f"“{value}”"
+    if command == "json-string-escape":
+        import json
+
+        return json.dumps(text, ensure_ascii=False)
+    if command == "code-fence":
+        value = text.strip("\n")
+        if value.startswith("```") and value.endswith("```"):
+            lines = value.splitlines()
+            return "\n".join(lines[1:-1]) if len(lines) >= 2 else value
+        return f"```\n{value}\n```"
     if command == "bullet-list":
         marker = re.compile(
             r"^(?P<indent>[ \t]*)(?:(?:[•●◦▪‣*+\-–—])|(?:\d{1,4}[.)])|(?:[A-Za-z][.)]))[ \t]+"

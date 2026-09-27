@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import colorsys
+import base64
 import difflib
+import hashlib
 import json
 import re
 import unicodedata
@@ -80,3 +82,32 @@ def compare_text(left: str, right: str) -> str:
         fromfile="selección", tofile="portapapeles", lineterm="",
     )
     return "\n".join(lines)[:500_000]
+
+
+def sha256_digest(text: str) -> str:
+    if len(text) > 1_000_000:
+        raise ValueError("input is too large")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def decode_jwt(text: str) -> str:
+    token = text.strip()
+    parts = token.split(".")
+    if len(parts) != 3 or any(not part for part in parts[:2]):
+        raise ValueError("JWT inválido: se esperaban tres segmentos")
+
+    def decode_part(value):
+        padding = "=" * (-len(value) % 4)
+        try:
+            raw = base64.urlsafe_b64decode(value + padding)
+            body = json.loads(raw)
+        except (ValueError, TypeError, UnicodeDecodeError) as exc:
+            raise ValueError("JWT inválido o no contiene JSON") from exc
+        return body
+
+    decoded = {
+        "header": decode_part(parts[0]),
+        "payload": decode_part(parts[1]),
+        "signature": "presente; no verificada por TextPik",
+    }
+    return json.dumps(decoded, ensure_ascii=False, indent=2, sort_keys=True)

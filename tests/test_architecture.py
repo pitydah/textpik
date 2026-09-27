@@ -43,9 +43,11 @@ from src.textpik_core.platform import (
 )
 from src.textpik_core.planning import (
     ContextSnapshot,
+    apply_profile_order,
     order_actions_for_popup,
     plan_actions,
 )
+from src.textpik_core.utilities import decode_jwt, sha256_digest
 from src.textpik_core.profiles import normalize_profiles, resolve_profile
 from src.textpik_core.settings import (
     DEFAULT_SETTINGS as CORE_DEFAULT_SETTINGS,
@@ -57,6 +59,28 @@ from src.textpik_core.text import build_command_argv, classify_text, normalize_u
 
 
 class ActionContractTest(unittest.TestCase):
+    def test_programmer_actions_are_local_and_deterministic(self):
+        self.assertEqual(
+            transform_text("json-string-escape", 'línea\n"valor"'),
+            '"línea\\n\\"valor\\""',
+        )
+        fenced = transform_text("code-fence", "print('ok')")
+        self.assertEqual(fenced, "```\nprint('ok')\n```")
+        self.assertEqual(transform_text("code-fence", fenced), "print('ok')")
+        self.assertEqual(
+            sha256_digest("TextPik"),
+            "683bc2fa005d1387a6c1af9e9190e5eaf512c7afeae2265a8002141f8c96e7ea",
+        )
+
+    def test_jwt_decoder_never_claims_signature_verification(self):
+        token = (
+            "eyJhbGciOiJub25lIn0."
+            "eyJzdWIiOiJ0ZXh0cGlrIiwicm9sZSI6ImRldiJ9."
+            "signature"
+        )
+        decoded = decode_jwt(token)
+        self.assertIn('"sub": "textpik"', decoded)
+        self.assertIn("no verificada", decoded)
     def test_web_ai_providers_are_classified_as_ai(self):
         self.assertEqual(
             infer_category("Preguntar a Claude", "xdg-open https://claude.ai"),
@@ -254,6 +278,25 @@ class ActionPlanningTest(unittest.TestCase):
 
 
 class ContextProfileTest(unittest.TestCase):
+    def test_profile_order_is_explicit_and_developer_mode_matches_app_or_code(self):
+        actions = [
+            {"id": "copy", "cmd": "copy"},
+            {"id": "json", "cmd": "format-json"},
+            {"id": "terminal", "cmd": "terminal"},
+        ]
+        ordered = apply_profile_order(actions, ("terminal", "copy", "json"))
+        self.assertEqual([item["id"] for item in ordered], ["terminal", "copy", "json"])
+        profiles = [{
+            "name": "Dev", "mode": "developer", "application": "",
+            "applications": ["code", "konsole"], "text_types": ["code", "json"],
+            "action_ids": ["terminal", "copy"],
+        }]
+        self.assertIsNotNone(
+            resolve_profile(profiles, ContextSnapshot(application="Visual Studio Code"))
+        )
+        self.assertIsNotNone(
+            resolve_profile(profiles, ContextSnapshot(text_types=frozenset({"json"})))
+        )
     def test_normalization_discards_empty_and_bounds_profiles(self):
         profiles = normalize_profiles(
             [
@@ -266,17 +309,10 @@ class ContextProfileTest(unittest.TestCase):
                 },
             ]
         )
-        self.assertEqual(
-            profiles,
-            [
-                {
-                    "name": "Web",
-                    "application": "Firefox",
-                    "text_types": ["url"],
-                    "action_ids": ["copy", "search"],
-                }
-            ],
-        )
+        self.assertEqual(profiles[0]["name"], "Web")
+        self.assertEqual(profiles[0]["applications"], ["Firefox"])
+        self.assertEqual(profiles[0]["action_ids"], ["copy", "search"])
+        self.assertEqual(profiles[0]["mode"], "custom")
 
     def test_first_matching_profile_has_explicit_priority(self):
         profiles = [
@@ -298,7 +334,7 @@ class ContextProfileTest(unittest.TestCase):
         )
         profile = resolve_profile(profiles, snapshot)
         self.assertEqual(profile.name, "Firefox URLs")
-        self.assertEqual(profile.action_ids, frozenset({"open"}))
+        self.assertEqual(profile.action_ids, ("open",))
 
     def test_profile_never_retains_selected_text(self):
         profile = resolve_profile(
@@ -401,6 +437,39 @@ class ExecutionPolicyTest(unittest.TestCase):
 
 
 class SettingsContractTest(unittest.TestCase):
+    def test_integration_preferences_are_validated_and_preserved(self):
+        normalized = normalize_core_settings(
+            {
+                "ollama_endpoint": "http://localhost:11434/api/generate",
+                "ollama_model": "qwen2.5:3b",
+                "languagetool_endpoint": "https://language.example/v2/check",
+                "grammar_language": "es-CL",
+                "ocr_languages": "spa+eng",
+                "media_player": "mpv",
+                "terminal_app": "kitty",
+                "kdeconnect_device": "phone-01",
+                "speech_engine": "spd-say",
+            }
+        )
+        self.assertEqual(normalized["ollama_model"], "qwen2.5:3b")
+        self.assertEqual(normalized["grammar_language"], "es-CL")
+        self.assertEqual(normalized["ocr_languages"], "spa+eng")
+        self.assertEqual(normalized["media_player"], "mpv")
+        self.assertEqual(normalized["kdeconnect_device"], "phone-01")
+
+        rejected = normalize_core_settings(
+            {
+                "ollama_endpoint": "https://remote.example/api/generate",
+                "terminal_app": "kitty --execute",
+                "ocr_languages": "spa; rm -rf /",
+            }
+        )
+        self.assertEqual(
+            rejected["ollama_endpoint"], CORE_DEFAULT_SETTINGS["ollama_endpoint"]
+        )
+        self.assertEqual(rejected["terminal_app"], "auto")
+        self.assertEqual(rejected["ocr_languages"], "auto")
+
     def test_rc5_popup_limits_migrate_to_eight_direct_actions(self):
         migrated = normalize_core_settings(
             {
@@ -409,7 +478,7 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_compact_actions": 4,
             }
         )
-        self.assertEqual(migrated["ui_version"], 9)
+        self.assertEqual(migrated["ui_version"], 13)
         self.assertEqual(migrated["max_popup_actions"], 8)
         self.assertEqual(migrated["popup_compact_actions"], 8)
 
@@ -422,7 +491,7 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_background_color": "#123456",
             }
         )
-        self.assertEqual(migrated["ui_version"], 9)
+        self.assertEqual(migrated["ui_version"], 13)
         self.assertEqual(migrated["popup_icon_size"], 17)
         self.assertEqual(migrated["popup_spacing"], 2)
         self.assertEqual(migrated["popup_background_color"], "#123456")
@@ -437,7 +506,7 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_cursor_gap": 6,
             }
         )
-        self.assertEqual(stock["ui_version"], 9)
+        self.assertEqual(stock["ui_version"], 13)
         self.assertEqual(stock["popup_auto_hide_ms"], 8000)
         self.assertEqual(stock["popup_cursor_gap"], 3)
 
@@ -455,7 +524,7 @@ class SettingsContractTest(unittest.TestCase):
         migrated = normalize_core_settings(
             {"ui_version": 7, "popup_auto_hide_ms": 12000}
         )
-        self.assertEqual(migrated["ui_version"], 9)
+        self.assertEqual(migrated["ui_version"], 13)
         self.assertEqual(migrated["popup_auto_hide_ms"], 8000)
 
     def test_settings_schema_drops_unknown_keys_and_bounds_values(self):
@@ -713,6 +782,33 @@ class SpellingServiceTest(unittest.TestCase):
 
 
 class IntegrationPolicyTest(unittest.TestCase):
+    @patch(
+        "src.textpik_core.integration.which",
+        side_effect=lambda name: "/usr/bin/mpv" if name == "mpv" else None,
+    )
+    def test_action_availability_respects_explicit_application_preferences(self, _which):
+        self.assertTrue(
+            action_availability(
+                "open-media-player", wayland=True, kde=False,
+                preferred_media_player="mpv",
+            ).available
+        )
+        unavailable = action_availability(
+            "terminal", wayland=True, kde=False, preferred_terminal="kitty"
+        )
+        self.assertFalse(unavailable.available)
+        self.assertIn("kitty", unavailable.label)
+
+    @patch("src.textpik_core.integration.which", return_value="/usr/bin/tesseract")
+    def test_action_availability_rejects_missing_configured_ocr_language(self, _which):
+        status = action_availability(
+            "ocr-image", wayland=True, kde=False,
+            capabilities=RuntimeCapabilities(ocr_languages=("eng",)),
+            preferred_ocr_languages="spa+eng",
+        )
+        self.assertFalse(status.available)
+        self.assertIn("spa", status.label)
+
     @patch("src.textpik_core.integration.which", return_value="/usr/bin/tool")
     def test_optional_providers_require_their_real_runtime_capability(self, _which):
         unavailable = RuntimeCapabilities()

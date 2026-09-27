@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import re
+from urllib.parse import urlsplit
 
 from .profiles import normalize_profiles
 from .media import normalize_torrent_servers
 
 
 DEFAULT_SETTINGS = {
-    "ui_version": 9,
+    "ui_version": 13,
     "show_on_selection": True,
     "start_at_login": True,
     "popup_delay_ms": 0,
@@ -32,7 +34,8 @@ DEFAULT_SETTINGS = {
     "context_profiles_enabled": False,
     "context_profiles": [],
     "spelling_action_migrated": False,
-    "adaptive_popup": True,
+    "adaptive_popup": False,
+    "developer_mode": False,
     "popup_min_confidence": 62,
     "popup_full_confidence": 84,
     "popup_compact_actions": 8,
@@ -75,6 +78,22 @@ DEFAULT_SETTINGS = {
     "blocked_activities": [],
     "theme_preset": "custom",
     "torrent_servers": [],
+    "torrent_dispatch_mode": "ask",
+    "ollama_endpoint": "http://127.0.0.1:11434/api/generate",
+    "ollama_model": "",
+    "languagetool_endpoint": "http://127.0.0.1:8010/v2/check",
+    "grammar_language": "auto",
+    "ocr_languages": "auto",
+    "media_player": "auto",
+    "terminal_app": "auto",
+    "kdeconnect_device": "auto",
+    "speech_engine": "auto",
+    "spelling_language": "auto",
+    "screenshot_backend": "auto",
+    "printer": "auto",
+    "browser_app": "auto",
+    "translation_target": "es",
+    "clipboard_backend": "auto",
 }
 
 
@@ -158,6 +177,16 @@ def normalize_settings(
         normalized["ui_version"] = 8
     if ui_version < 9:
         normalized["ui_version"] = 9
+    if ui_version < 10:
+        normalized["ui_version"] = 10
+    if ui_version < 11:
+        normalized["ui_version"] = 11
+    if ui_version < 12:
+        normalized["ui_version"] = 12
+    if ui_version < 13:
+        if ui_version > 0:
+            normalized["adaptive_popup"] = False
+        normalized["ui_version"] = 13
 
     _normalize_int(normalized, "popup_delay_ms", minimum=0)
     _normalize_int(normalized, "adaptive_delay_min_ms", minimum=30, maximum=200)
@@ -209,6 +238,7 @@ def normalize_settings(
         "context_profiles_enabled",
         "spelling_action_migrated",
         "adaptive_popup",
+        "developer_mode",
         "sticky_popup",
         "show_numeric_badges",
         "show_all_popup_actions",
@@ -246,6 +276,51 @@ def normalize_settings(
     normalized["torrent_servers"] = normalize_torrent_servers(
         normalized.get("torrent_servers", [])
     )
+    if normalized.get("torrent_dispatch_mode") not in {"ask", "default", "all"}:
+        normalized["torrent_dispatch_mode"] = "ask"
+    normalized["ollama_endpoint"] = _normalize_endpoint(
+        normalized.get("ollama_endpoint"),
+        DEFAULT_SETTINGS["ollama_endpoint"],
+        local_only=True,
+    )
+    normalized["languagetool_endpoint"] = _normalize_endpoint(
+        normalized.get("languagetool_endpoint"),
+        DEFAULT_SETTINGS["languagetool_endpoint"],
+    )
+    normalized["ollama_model"] = _normalize_token(
+        normalized.get("ollama_model"), r"[A-Za-z0-9_.:/-]{1,100}", ""
+    )
+    normalized["grammar_language"] = _normalize_token(
+        normalized.get("grammar_language"), r"(?:auto|[A-Za-z]{2,3}(?:-[A-Za-z]{2})?)", "auto"
+    )
+    normalized["ocr_languages"] = _normalize_token(
+        normalized.get("ocr_languages"), r"(?:auto|[A-Za-z0-9_.+-]{1,100})", "auto"
+    )
+    for key in ("media_player", "terminal_app", "speech_engine"):
+        normalized[key] = _normalize_token(
+            normalized.get(key), r"(?:auto|[A-Za-z0-9_.+-]{1,80})", "auto"
+        )
+    normalized["kdeconnect_device"] = _normalize_token(
+        normalized.get("kdeconnect_device"), r"(?:auto|[A-Za-z0-9_.:-]{1,160})", "auto"
+    )
+    normalized["spelling_language"] = _normalize_token(
+        normalized.get("spelling_language"),
+        r"(?:auto|[A-Za-z]{2,3}(?:[_-][A-Za-z]{2})?)",
+        "auto",
+    )
+    if normalized.get("screenshot_backend") not in {
+        "auto", "spectacle", "gnome-screenshot", "grim-slurp", "portal"
+    }:
+        normalized["screenshot_backend"] = "auto"
+    for key in ("printer", "browser_app"):
+        normalized[key] = _normalize_token(
+            normalized.get(key), r"(?:auto|[A-Za-z0-9_.:+-]{1,160})", "auto"
+        )
+    normalized["translation_target"] = _normalize_token(
+        normalized.get("translation_target"), r"[A-Za-z]{2,3}(?:-[A-Za-z]{2})?", "es"
+    )
+    if normalized.get("clipboard_backend") not in {"auto", "klipper", "textpik"}:
+        normalized["clipboard_backend"] = "auto"
     for key in ("spelling_ignored_words", "spelling_personal_words"):
         values = normalized.get(key, [])
         normalized[key] = (
@@ -290,6 +365,21 @@ def normalize_settings(
         ):
             normalized[key] = color_normalizer(normalized[key], DEFAULT_SETTINGS[key])
     return normalized
+
+
+def _normalize_endpoint(value, fallback: str, *, local_only: bool = False) -> str:
+    endpoint = str(value or "").strip()[:2048]
+    parsed = urlsplit(endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return fallback
+    if local_only and parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return fallback
+    return endpoint
+
+
+def _normalize_token(value, pattern: str, fallback: str) -> str:
+    token = str(value or "").strip()
+    return token if re.fullmatch(pattern, token) else fallback
 
 
 def _normalize_int(

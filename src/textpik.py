@@ -49,6 +49,9 @@ try:
     from textpik_core.integration import (
         RuntimeCapabilities,
         action_availability,
+        available_commands,
+        cups_printers,
+        kdeconnect_devices,
         probe_runtime_capabilities,
     )
     from textpik_core.execution import is_terminal_execution as core_is_terminal_execution
@@ -62,6 +65,7 @@ try:
     )
     from textpik_core.planning import (
         ContextSnapshot,
+        apply_profile_order,
         plan_actions,
     )
     from textpik_core.profiles import resolve_profile
@@ -75,9 +79,11 @@ try:
         clean_terminal_text,
         color_details,
         compare_text,
+        decode_jwt,
         extract_entities,
         format_json,
         slugify,
+        sha256_digest,
     )
     from textpik_core.spelling import SpellingService
     from textpik_core.grammar import LanguageToolService, apply_suggestions
@@ -86,10 +92,16 @@ try:
     from textpik_core.providers import OllamaProvider, TesseractProvider
     from textpik_core.history import HistoryStore
     from textpik_core.media import (
+        build_browser_workflow_url,
         default_desktop_handler,
+        delete_torrent_server_credentials,
+        import_userscript_workflow,
         media_player_command,
         normalize_magnet,
+        normalize_browser_workflow_template,
+        protect_torrent_server_credentials,
         send_magnet_to_server,
+        check_torrent_server_connection,
     )
     from textpik_core.health import CrashSentinel
     from textpik_core.automation import (
@@ -131,6 +143,9 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.integration import (
         RuntimeCapabilities,
         action_availability,
+        available_commands,
+        cups_printers,
+        kdeconnect_devices,
         probe_runtime_capabilities,
     )
     from .textpik_core.execution import (
@@ -146,6 +161,7 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     )
     from .textpik_core.planning import (
         ContextSnapshot,
+        apply_profile_order,
         plan_actions,
     )
     from .textpik_core.profiles import resolve_profile
@@ -159,9 +175,11 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
         clean_terminal_text,
         color_details,
         compare_text,
+        decode_jwt,
         extract_entities,
         format_json,
         slugify,
+        sha256_digest,
     )
     from .textpik_core.spelling import SpellingService
     from .textpik_core.grammar import LanguageToolService, apply_suggestions
@@ -170,10 +188,16 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.providers import OllamaProvider, TesseractProvider
     from .textpik_core.history import HistoryStore
     from .textpik_core.media import (
+        build_browser_workflow_url,
         default_desktop_handler,
+        delete_torrent_server_credentials,
+        import_userscript_workflow,
         media_player_command,
         normalize_magnet,
+        normalize_browser_workflow_template,
+        protect_torrent_server_credentials,
         send_magnet_to_server,
+        check_torrent_server_connection,
     )
     from .textpik_core.health import CrashSentinel
     from .textpik_core.automation import (
@@ -324,6 +348,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QMenu,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStyle,
     QSystemTrayIcon,
@@ -649,6 +674,40 @@ DEFAULT_ACTIONS = [
         "enabled": True,
         "context": ["json"],
         "variants": {"alt": "minify-json"},
+    },
+    {
+        "name": "Decodificar JWT",
+        "icon": "json.svg",
+        "cmd": "decode-jwt",
+        "enabled": True,
+        "context": ["jwt"],
+        "placement": "bar",
+    },
+    {
+        "name": "Calcular SHA-256",
+        "icon": "base64.svg",
+        "cmd": "sha256",
+        "enabled": True,
+        "context": ["code", "text", "hash"],
+        "placement": "palette",
+    },
+    {
+        "name": "Escapar como cadena JSON",
+        "icon": "json.svg",
+        "cmd": "json-string-escape",
+        "enabled": True,
+        "context": ["code", "json", "text"],
+        "placement": "bar",
+        "variants": {"alt": "copy-transform:json-string-escape"},
+    },
+    {
+        "name": "Envolver en bloque de código",
+        "icon": "html-code.svg",
+        "cmd": "code-fence",
+        "enabled": True,
+        "context": ["code", "json", "error", "text"],
+        "placement": "bar",
+        "variants": {"alt": "copy-transform:code-fence"},
     },
     {
         "name": "Extraer datos",
@@ -1684,6 +1743,19 @@ class MoreActionsButton(QPushButton):
             )
 
 
+class ActionListWidget(QListWidget):
+    """Distinguish activation clicks from the palette's pin context menu."""
+
+    action_clicked = Signal(object)
+
+    def mouseReleaseEvent(self, event):
+        item = self.itemAt(event.position().toPoint())
+        button = event.button()
+        super().mouseReleaseEvent(event)
+        if button == Qt.LeftButton and item is not None:
+            self.action_clicked.emit(item)
+
+
 class ActionPalette(QWidget):
     """Searchable overflow palette that stays a transient desktop surface."""
 
@@ -1721,11 +1793,15 @@ class ActionPalette(QWidget):
             "Filtra acciones por nombre o categoría mientras escribes"
         )
         self.search.setClearButtonEnabled(True)
-        self.list = QListWidget(self)
+        self.list = ActionListWidget(self)
         self.list.setAccessibleName("Resultados de acciones")
+        self.list.setAccessibleDescription(
+            "Clic para ejecutar; clic derecho para fijar en la barra"
+        )
         self.list.setUniformItemSizes(True)
         self.list.setIconSize(QSize(17, 17))
         self.list.setMinimumHeight(150)
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.pin = QPushButton("Fijar", self)
         self.pin.setAccessibleDescription(
             "Mueve la acción seleccionada al inicio de la barra"
@@ -1746,7 +1822,11 @@ class ActionPalette(QWidget):
         self.search.textChanged.connect(self._filter)
         self.search.returnPressed.connect(self._activate_current)
         self.list.itemActivated.connect(self._activate)
-        self.list.itemClicked.connect(lambda _: self.pin.setEnabled(True))
+        self.list.action_clicked.connect(self._activate)
+        self.list.currentItemChanged.connect(
+            lambda current, _previous: self.pin.setEnabled(current is not None)
+        )
+        self.list.customContextMenuRequested.connect(self._show_item_context_menu)
         self.pin.clicked.connect(self._pin_current)
         self.suppress_app.clicked.connect(self._suppress_application)
 
@@ -1811,7 +1891,7 @@ class ActionPalette(QWidget):
     def open_for(self, actions, origin, settings, application=""):
         self._actions = list(actions)
         self.subtitle.setText(
-            f"{len(self._actions)} no fijadas  ·  Enter para ejecutar  ·  Esc para cerrar"
+            f"{len(self._actions)} no fijadas  ·  Clic para ejecutar  ·  Esc para cerrar"
         )
         self._application = str(application or "").strip()
         self.suppress_app.setVisible(bool(self._application))
@@ -1896,11 +1976,27 @@ class ActionPalette(QWidget):
             self.hide()
             self.action_triggered.emit(command)
 
-    def _pin_current(self):
-        item = self.list.currentItem()
+    def _show_item_context_menu(self, position):
+        item = self.list.itemAt(position)
+        if item is None:
+            return
+        self.list.setCurrentItem(item)
+        menu = QMenu(self)
+        execute_action = menu.addAction("Ejecutar")
+        pin_action = menu.addAction("Fijar en la barra")
+        selected = menu.exec(self.list.viewport().mapToGlobal(position))
+        if selected is execute_action:
+            self._activate(item)
+        elif selected is pin_action:
+            self._pin_item(item)
+
+    def _pin_item(self, item):
         if item is not None:
             self.pin_requested.emit(item.data(Qt.UserRole + 1))
             self.hide()
+
+    def _pin_current(self):
+        self._pin_item(self.list.currentItem())
 
     def hideEvent(self, event):
         self.closed.emit()
@@ -2881,6 +2977,7 @@ class ContextProfileDialog(QDialog):
     def __init__(self, actions, profile=None, parent=None):
         super().__init__(parent)
         profile = profile or {}
+        self.profile_mode = str(profile.get("mode", "custom"))
         self.setWindowTitle("Editar perfil" if profile else "Nuevo perfil contextual")
         self.setMinimumSize(520, 520)
         layout = QVBoxLayout(self)
@@ -2889,10 +2986,13 @@ class ContextProfileDialog(QDialog):
         self.name_edit.setPlaceholderText("Ej: Navegación web")
         form.addRow("Nombre", self.name_edit)
         self.application_edit = QLineEdit(
-            str(profile.get("application", "")), self
+            ", ".join(
+                profile.get("applications", [])
+                or ([str(profile.get("application", ""))] if profile.get("application") else [])
+            ), self
         )
-        self.application_edit.setPlaceholderText("Ej: firefox, libreoffice, code")
-        form.addRow("Aplicación contiene", self.application_edit)
+        self.application_edit.setPlaceholderText("Ej: code, codium, jetbrains, terminal")
+        form.addRow("Aplicaciones (separadas por coma)", self.application_edit)
         self.types_edit = QLineEdit(
             ", ".join(profile.get("text_types", [])), self
         )
@@ -2901,7 +3001,7 @@ class ContextProfileDialog(QDialog):
         layout.addLayout(form)
         note = QLabel(
             "La primera regla coincidente limita la barra a las acciones marcadas, "
-            "sin cambiar su orden global.",
+            "en el orden exacto de esta lista. Arrastra libremente para reordenar.",
             self,
         )
         note.setWordWrap(True)
@@ -2909,8 +3009,19 @@ class ContextProfileDialog(QDialog):
         layout.addWidget(note)
         self.action_list = QListWidget(self)
         self.action_list.setAlternatingRowColors(True)
-        selected = set(profile.get("action_ids", []))
-        for action in actions:
+        self.action_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.action_list.setDefaultDropAction(Qt.MoveAction)
+        selected_order = list(profile.get("action_ids", []))
+        selected = set(selected_order)
+        position = {action_id: index for index, action_id in enumerate(selected_order)}
+        ordered_actions = sorted(
+            enumerate(actions),
+            key=lambda pair: (
+                0 if pair[1].get("id", pair[1].get("cmd", "")) in selected else 1,
+                position.get(pair[1].get("id", pair[1].get("cmd", "")), pair[0]),
+            ),
+        )
+        for _index, action in ordered_actions:
             action_id = action.get("id", action.get("cmd", ""))
             item = QListWidgetItem(action["name"], self.action_list)
             item.setData(Qt.UserRole, action_id)
@@ -2923,6 +3034,10 @@ class ContextProfileDialog(QDialog):
         layout.addWidget(buttons)
 
     def get_profile(self):
+        applications = [
+            value.strip() for value in self.application_edit.text().split(",")
+            if value.strip()
+        ]
         types = [
             value.strip().lower()
             for value in self.types_edit.text().split(",")
@@ -2935,9 +3050,11 @@ class ContextProfileDialog(QDialog):
         ]
         return {
             "name": self.name_edit.text().strip(),
-            "application": self.application_edit.text().strip(),
+            "application": applications[0] if applications else "",
+            "applications": list(dict.fromkeys(applications)),
             "text_types": list(dict.fromkeys(types)),
             "action_ids": action_ids,
+            "mode": self.profile_mode,
         }
 
     def accept(self):
@@ -2945,7 +3062,7 @@ class ContextProfileDialog(QDialog):
         if not profile["name"]:
             QMessageBox.warning(self, "Perfil incompleto", "Indica un nombre.")
             return
-        if not profile["application"] and not profile["text_types"]:
+        if not profile["applications"] and not profile["text_types"]:
             QMessageBox.warning(
                 self,
                 "Perfil incompleto",
@@ -3147,19 +3264,25 @@ class AutomationEditDialog(QDialog):
 
 
 class TorrentServerDialog(QDialog):
-    """Small credential editor for a user-owned torrent server."""
+    """Configure a native or browser-owned torrent delivery workflow."""
 
     def __init__(self, server=None, parent=None):
         super().__init__(parent)
         server = server or {}
+        self._password_ref = str(server.get("password_ref", ""))
+        self._credential_identity = (
+            str(server.get("type", "")), str(server.get("endpoint", "")),
+            str(server.get("username", "")), str(server.get("name", "")),
+        )
         self.setWindowTitle("Servidor torrent")
-        self.setMinimumWidth(430)
+        self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.name = QLineEdit(str(server.get("name", "")), self)
         self.kind = QComboBox(self)
         self.kind.addItem("qBittorrent Web API", "qbittorrent")
         self.kind.addItem("Transmission RPC", "transmission")
+        self.kind.addItem("Userscript en el navegador", "browser")
         index = self.kind.findData(server.get("type", "qbittorrent"))
         self.kind.setCurrentIndex(max(0, index))
         self.endpoint = QLineEdit(str(server.get("endpoint", "")), self)
@@ -3167,41 +3290,168 @@ class TorrentServerDialog(QDialog):
         self.username = QLineEdit(str(server.get("username", "")), self)
         self.password = QLineEdit(str(server.get("password", "")), self)
         self.password.setEchoMode(QLineEdit.Password)
+        self.browser_template = QLineEdit(
+            str(server.get("browser_url_template", "")), self
+        )
+        self.browser_template.setPlaceholderText(
+            "https://servidor.local/agregar?magnet={magnet}"
+        )
+        self.script_path = QLineEdit(str(server.get("script_path", "")), self)
+        self.script_path.setReadOnly(True)
+        self.script_name = str(server.get("script_name", ""))
+        import_script = QPushButton("Importar userscript…", self)
+        import_script.clicked.connect(self._import_userscript)
+        script_row = QWidget(self)
+        script_layout = QHBoxLayout(script_row)
+        script_layout.setContentsMargins(0, 0, 0, 0)
+        script_layout.setSpacing(7)
+        script_layout.addWidget(self.script_path, 1)
+        script_layout.addWidget(import_script)
+        self.default_server = QCheckBox("Usar como servidor predeterminado", self)
+        self.default_server.setChecked(bool(server.get("default", False)))
+        self.download_dir = QLineEdit(str(server.get("download_dir", "")), self)
+        self.download_dir.setPlaceholderText("Opcional · /ruta/de/descargas")
+        self.category = QLineEdit(str(server.get("category", "")), self)
+        self.category.setPlaceholderText("Opcional · categoría o etiqueta principal")
+        self.tags = QLineEdit(str(server.get("tags", "")), self)
+        self.tags.setPlaceholderText("Opcional · linux, películas, archivo")
+        self.paused = QCheckBox("Añadir pausado", self)
+        self.paused.setChecked(bool(server.get("paused", False)))
+        self.sequential = QCheckBox("Descarga secuencial (qBittorrent)", self)
+        self.sequential.setChecked(bool(server.get("sequential", False)))
         form.addRow("Nombre", self.name)
         form.addRow("Tipo", self.kind)
         form.addRow("Dirección", self.endpoint)
         form.addRow("Usuario", self.username)
         form.addRow("Contraseña", self.password)
+        form.addRow("Userscript", script_row)
+        form.addRow("URL del flujo", self.browser_template)
+        form.addRow("Destino", self.download_dir)
+        form.addRow("Categoría", self.category)
+        form.addRow("Etiquetas", self.tags)
+        form.addRow("Inicio", self.paused)
+        form.addRow("Orden", self.sequential)
+        form.addRow("Preferencia", self.default_server)
         layout.addLayout(form)
+        self._native_fields = (self.endpoint, self.username, self.password)
+        self._browser_fields = (script_row, self.browser_template)
+        self._form = form
         note = QLabel(
-            "La dirección debe usar HTTP o HTTPS. Las credenciales se guardan "
-            "en el archivo privado de configuración del usuario.",
+            "Los flujos nativos usan la API del servidor. En modo userscript, "
+            "TextPik solo lee los metadatos y abre la URL preparada; el script "
+            "debe estar instalado y se ejecuta exclusivamente en tu navegador. "
+            "Usa @textpik-url con {magnet}, {hash} o {name}.",
             self,
         )
         note.setWordWrap(True)
         layout.addWidget(note)
+        test_button = QPushButton("Probar conexión", self)
+        test_button.clicked.connect(self._test_connection)
+        layout.addWidget(test_button)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         buttons.accepted.connect(self._accept_validated)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.kind.currentIndexChanged.connect(self._sync_type_fields)
+        self._sync_type_fields()
+
+    def _set_form_field_visible(self, field, visible):
+        field.setVisible(visible)
+        label = self._form.labelForField(field)
+        if label is not None:
+            label.setVisible(visible)
+
+    def _sync_type_fields(self):
+        browser = self.kind.currentData() == "browser"
+        for field in self._native_fields:
+            self._set_form_field_visible(field, not browser)
+        for field in self._browser_fields:
+            self._set_form_field_visible(field, browser)
+        self.download_dir.setEnabled(not browser)
+        self.category.setEnabled(not browser)
+        self.tags.setEnabled(not browser)
+        self.paused.setEnabled(not browser)
+        self.sequential.setEnabled(self.kind.currentData() == "qbittorrent")
+
+    def _import_userscript(self):
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "Importar userscript de navegador",
+            str(Path.home()),
+            "Userscripts (*.user.js *.js);;JavaScript (*.js)",
+        )
+        if not path:
+            return
+        try:
+            imported = import_userscript_workflow(path)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Userscript no compatible", str(exc))
+            return
+        if not self.name.text().strip():
+            self.name.setText(imported["name"])
+        self.browser_template.setText(imported["browser_url_template"])
+        self.script_path.setText(imported["script_path"])
+        self.script_name = imported["script_name"]
 
     def _accept_validated(self):
         from urllib.parse import urlsplit
 
+        if not self.name.text().strip():
+            QMessageBox.warning(self, "Servidor inválido", "Indica un nombre para el flujo.")
+            return
+        if self.kind.currentData() == "browser":
+            if not normalize_browser_workflow_template(
+                self.browser_template.text()
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Flujo de navegador inválido",
+                    "Indica una URL HTTP(S) que contenga al menos {magnet}.",
+                )
+                return
+            self.accept()
+            return
         endpoint = self.endpoint.text().strip()
         parsed = urlsplit(endpoint)
-        if not self.name.text().strip() or parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            QMessageBox.warning(self, "Servidor inválido", "Indica un nombre y una dirección HTTP(S) válida.")
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            QMessageBox.warning(self, "Servidor inválido", "Indica una dirección HTTP(S) válida.")
             return
         self.accept()
 
+    def _test_connection(self):
+        try:
+            result = check_torrent_server_connection(self.value())
+        except Exception as exc:
+            QMessageBox.warning(self, "Servidor torrent", str(exc))
+            return
+        QMessageBox.information(self, "Servidor torrent", result)
+
     def value(self):
+        identity = (
+            self.kind.currentData(), self.endpoint.text().strip().rstrip("/"),
+            self.username.text(), self.name.text().strip(),
+        )
+        password_ref = (
+            self._password_ref
+            if identity == self._credential_identity and not self.password.text()
+            else ""
+        )
         return {
             "name": self.name.text().strip(),
             "type": self.kind.currentData(),
             "endpoint": self.endpoint.text().strip().rstrip("/"),
             "username": self.username.text(),
             "password": self.password.text(),
+            "password_ref": password_ref,
+            "browser_url_template": self.browser_template.text().strip(),
+            "script_name": self.script_name,
+            "script_path": self.script_path.text().strip(),
+            "default": self.default_server.isChecked(),
+            "download_dir": self.download_dir.text().strip(),
+            "category": self.category.text().strip(),
+            "tags": self.tags.text().strip(),
+            "paused": self.paused.isChecked(),
+            "sequential": self.sequential.isChecked(),
         }
 
 
@@ -3362,12 +3612,16 @@ class SettingsDialog(QDialog):
         )
         beh_form.addRow("Máximo del historial", self.history_max_items)
         self.adaptive_popup = QCheckBox(
-            "Adaptar la barra cuando falte contexto fiable", self
+            "Permitir modo adaptativo (puede reducir u ocultar la barra)", self
         )
         self.adaptive_popup.setChecked(
             bool(self.settings.get("adaptive_popup", True))
         )
-        beh_form.addRow("Barra adaptativa", self.adaptive_popup)
+        self.adaptive_popup.setToolTip(
+            "Desactivado: respeta siempre el orden y tamaño manual. "
+            "Activado: usa confianza de selección para reducir o no mostrar el popup."
+        )
+        beh_form.addRow("Orden y visibilidad", self.adaptive_popup)
         self.popup_min_confidence = self._spin(
             0, 90, int(self.settings.get("popup_min_confidence", 45))
         )
@@ -3463,6 +3717,12 @@ class SettingsDialog(QDialog):
             bool(self.settings.get("context_profiles_enabled", False))
         )
         profiles_layout.addWidget(self.context_profiles_enabled)
+        self.developer_mode = QCheckBox(
+            "Modo programador: activar perfil de desarrollo para código, JSON y errores",
+            self,
+        )
+        self.developer_mode.setChecked(bool(self.settings.get("developer_mode", False)))
+        profiles_layout.addWidget(self.developer_mode)
         self.context_profiles_list = QListWidget(self)
         self.context_profiles_list.setMaximumHeight(105)
         self.context_profiles_list.setDragDropMode(QAbstractItemView.InternalMove)
@@ -3484,9 +3744,15 @@ class SettingsDialog(QDialog):
         edit_profile.clicked.connect(self._edit_context_profile)
         remove_profile = QPushButton("Eliminar", self)
         remove_profile.clicked.connect(self._remove_context_profile)
+        duplicate_profile = QPushButton("Duplicar", self)
+        duplicate_profile.clicked.connect(self._duplicate_context_profile)
+        developer_profile = QPushButton("Crear perfil programador", self)
+        developer_profile.clicked.connect(self._create_developer_profile)
         profile_buttons.addWidget(add_profile)
         profile_buttons.addWidget(edit_profile)
         profile_buttons.addWidget(remove_profile)
+        profile_buttons.addWidget(duplicate_profile)
+        profile_buttons.addWidget(developer_profile)
         profile_buttons.addStretch()
         profiles_layout.addLayout(profile_buttons)
         self._populate_context_profiles()
@@ -3590,8 +3856,12 @@ class SettingsDialog(QDialog):
         system_layout.addWidget(integration_note)
         system_layout.addStretch()
 
-        integrations_tab = QWidget()
-        integrations_layout = QVBoxLayout(integrations_tab)
+        integrations_tab = QScrollArea()
+        integrations_tab.setWidgetResizable(True)
+        integrations_tab.setFrameShape(QScrollArea.NoFrame)
+        integrations_content = QWidget()
+        integrations_layout = QVBoxLayout(integrations_content)
+        integrations_tab.setWidget(integrations_content)
         torrent_group = QGroupBox("Servidores torrent en la red")
         torrent_layout = QVBoxLayout(torrent_group)
         torrent_note = QLabel(
@@ -3601,7 +3871,20 @@ class SettingsDialog(QDialog):
         )
         torrent_note.setWordWrap(True)
         torrent_layout.addWidget(torrent_note)
+        dispatch_row = QHBoxLayout()
+        dispatch_row.addWidget(QLabel("Al ejecutar", self))
+        self.torrent_dispatch_mode = QComboBox(self)
+        self.torrent_dispatch_mode.addItem("Preguntar el servidor", "ask")
+        self.torrent_dispatch_mode.addItem("Usar el predeterminado", "default")
+        self.torrent_dispatch_mode.addItem("Enviar a todos", "all")
+        dispatch_index = self.torrent_dispatch_mode.findData(
+            self.settings.get("torrent_dispatch_mode", "ask")
+        )
+        self.torrent_dispatch_mode.setCurrentIndex(max(0, dispatch_index))
+        dispatch_row.addWidget(self.torrent_dispatch_mode, 1)
+        torrent_layout.addLayout(dispatch_row)
         self.torrent_servers = [dict(item) for item in self.settings.get("torrent_servers", [])]
+        self._obsolete_torrent_credentials = []
         self.torrent_servers_list = QListWidget(self)
         self.torrent_servers_list.setMinimumHeight(120)
         self.torrent_servers_list.itemDoubleClicked.connect(
@@ -3621,6 +3904,186 @@ class SettingsDialog(QDialog):
         torrent_buttons.addStretch()
         torrent_layout.addLayout(torrent_buttons)
         integrations_layout.addWidget(torrent_group)
+
+        local_ai_group = QGroupBox("IA local y corrección gramatical")
+        local_ai_form = QFormLayout(local_ai_group)
+        self.ollama_endpoint = QLineEdit(
+            self.settings.get("ollama_endpoint", ""), self
+        )
+        self.ollama_endpoint.setPlaceholderText(
+            "http://127.0.0.1:11434/api/generate"
+        )
+        self.ollama_model = QComboBox(self)
+        self.ollama_model.setEditable(True)
+        self.ollama_model.addItem("")
+        capabilities = getattr(controller, "_runtime_snapshot", {}).get("capabilities")
+        for model in getattr(capabilities, "ollama_models", ()):
+            self.ollama_model.addItem(model)
+        self.ollama_model.setCurrentText(self.settings.get("ollama_model", ""))
+        self.ollama_model.lineEdit().setPlaceholderText("Automático · ej. llama3.2:3b")
+        self.languagetool_endpoint = QLineEdit(
+            self.settings.get("languagetool_endpoint", ""), self
+        )
+        self.languagetool_endpoint.setPlaceholderText(
+            "http://127.0.0.1:8010/v2/check"
+        )
+        self.grammar_language = QComboBox(self)
+        self.grammar_language.setEditable(True)
+        self.grammar_language.addItem("auto")
+        for language in getattr(capabilities, "grammar_languages", ()):
+            self.grammar_language.addItem(language)
+        self.grammar_language.setCurrentText(
+            self.settings.get("grammar_language", "auto")
+        )
+        local_ai_form.addRow("Ollama · endpoint", self.ollama_endpoint)
+        local_ai_form.addRow("Ollama · modelo", self.ollama_model)
+        local_ai_form.addRow("LanguageTool · endpoint", self.languagetool_endpoint)
+        local_ai_form.addRow("LanguageTool · idioma", self.grammar_language)
+        self.spelling_language = QComboBox(self)
+        self.spelling_language.setEditable(True)
+        self.spelling_language.addItem("auto")
+        spelling_language = getattr(capabilities, "spelling_language", "")
+        if spelling_language:
+            self.spelling_language.addItem(spelling_language)
+        self.spelling_language.setCurrentText(
+            self.settings.get("spelling_language", "auto")
+        )
+        local_ai_form.addRow("Diccionario ortográfico", self.spelling_language)
+        local_ai_note = QLabel(
+            "Ollama se limita al equipo local por privacidad. LanguageTool puede "
+            "apuntar a una instancia local o a un servidor HTTPS administrado por ti.",
+            self,
+        )
+        local_ai_note.setWordWrap(True)
+        local_ai_note.setObjectName("mutedText")
+        local_ai_form.addRow("", local_ai_note)
+        self.local_ai_status = QLabel("Pulsa Verificar para consultar los servicios.", self)
+        self.local_ai_status.setWordWrap(True)
+        self.local_ai_status.setObjectName("mutedText")
+        verify_ai = QPushButton("Verificar IA y escritura", self)
+        verify_ai.clicked.connect(self._refresh_integrations)
+        local_ai_form.addRow("Estado", self.local_ai_status)
+        local_ai_form.addRow("", verify_ai)
+        integrations_layout.addWidget(local_ai_group)
+
+        applications_group = QGroupBox("Aplicaciones y dispositivos")
+        applications_form = QFormLayout(applications_group)
+        self.media_player = QComboBox(self)
+        self.media_player.addItem("Detectar automáticamente", "auto")
+        for label, command in (
+            ("MPV", "mpv"), ("VLC", "vlc"), ("Celluloid", "celluloid"),
+            ("Haruna", "haruna"), ("SMPlayer", "smplayer"),
+        ):
+            self.media_player.addItem(label, command)
+        self._select_combo_data(
+            self.media_player, self.settings.get("media_player", "auto")
+        )
+        self.terminal_app = QComboBox(self)
+        self.terminal_app.addItem("Detectar automáticamente", "auto")
+        for label, command in (
+            ("Konsole", "konsole"), ("GNOME Terminal", "gnome-terminal"),
+            ("Console / kgx", "kgx"), ("XFCE Terminal", "xfce4-terminal"),
+            ("MATE Terminal", "mate-terminal"), ("Kitty", "kitty"),
+            ("Alacritty", "alacritty"), ("XTerm", "xterm"),
+        ):
+            self.terminal_app.addItem(label, command)
+        self._select_combo_data(
+            self.terminal_app, self.settings.get("terminal_app", "auto")
+        )
+        self.kdeconnect_device = QComboBox(self)
+        self.kdeconnect_device.setEditable(True)
+        self.kdeconnect_device.addItem("Detectar automáticamente", "auto")
+        self.kdeconnect_device.setCurrentText(
+            self.settings.get("kdeconnect_device", "auto")
+        )
+        self.ocr_languages = QComboBox(self)
+        self.ocr_languages.setEditable(True)
+        self.ocr_languages.addItem("auto")
+        for language in getattr(capabilities, "ocr_languages", ()):
+            self.ocr_languages.addItem(language)
+        self.ocr_languages.setCurrentText(self.settings.get("ocr_languages", "auto"))
+        self.speech_engine = QComboBox(self)
+        self.speech_engine.addItem("Detectar automáticamente", "auto")
+        self.speech_engine.addItem("Speech Dispatcher", "spd-say")
+        self.speech_engine.addItem("eSpeak NG", "espeak-ng")
+        self.speech_engine.addItem("eSpeak", "espeak")
+        self._select_combo_data(
+            self.speech_engine, self.settings.get("speech_engine", "auto")
+        )
+        self.screenshot_backend = QComboBox(self)
+        for label, backend in (
+            ("Detectar automáticamente", "auto"), ("Spectacle", "spectacle"),
+            ("GNOME Screenshot", "gnome-screenshot"),
+            ("grim + slurp", "grim-slurp"), ("Portal del escritorio", "portal"),
+        ):
+            self.screenshot_backend.addItem(label, backend)
+        self._select_combo_data(
+            self.screenshot_backend, self.settings.get("screenshot_backend", "auto")
+        )
+        self.printer = QComboBox(self)
+        self.printer.setEditable(True)
+        self.printer.addItem("Detectar automáticamente", "auto")
+        self.printer.setCurrentText(self.settings.get("printer", "auto"))
+        self.browser_app = QComboBox(self)
+        self.browser_app.addItem("Navegador predeterminado", "auto")
+        for label, command in (
+            ("Firefox", "firefox"), ("Chromium", "chromium"),
+            ("Google Chrome", "google-chrome"), ("Brave", "brave-browser"),
+            ("Microsoft Edge", "microsoft-edge"),
+        ):
+            self.browser_app.addItem(label, command)
+        self._select_combo_data(
+            self.browser_app, self.settings.get("browser_app", "auto")
+        )
+        self.translation_target = QComboBox(self)
+        self.translation_target.setEditable(True)
+        for label, code in (
+            ("Español", "es"), ("Inglés", "en"), ("Portugués", "pt"),
+            ("Francés", "fr"), ("Alemán", "de"), ("Italiano", "it"),
+            ("Japonés", "ja"), ("Chino", "zh-CN"),
+        ):
+            self.translation_target.addItem(label, code)
+        target = self.settings.get("translation_target", "es")
+        target_index = self.translation_target.findData(target)
+        if target_index >= 0:
+            self.translation_target.setCurrentIndex(target_index)
+        else:
+            self.translation_target.setCurrentText(target)
+        self.clipboard_backend = QComboBox(self)
+        self.clipboard_backend.addItem("Detectar automáticamente", "auto")
+        self.clipboard_backend.addItem("Klipper", "klipper")
+        self.clipboard_backend.addItem("Historial privado de TextPik", "textpik")
+        self._select_combo_data(
+            self.clipboard_backend, self.settings.get("clipboard_backend", "auto")
+        )
+        applications_form.addRow("Reproductor multimedia", self.media_player)
+        applications_form.addRow("Terminal", self.terminal_app)
+        applications_form.addRow("Dispositivo KDE Connect", self.kdeconnect_device)
+        applications_form.addRow("Idiomas OCR", self.ocr_languages)
+        applications_form.addRow("Motor de voz", self.speech_engine)
+        applications_form.addRow("Captura para OCR", self.screenshot_backend)
+        applications_form.addRow("Impresora", self.printer)
+        applications_form.addRow("Navegador", self.browser_app)
+        applications_form.addRow("Idioma de traducción", self.translation_target)
+        applications_form.addRow("Gestor del portapapeles", self.clipboard_backend)
+        applications_note = QLabel(
+            "Con «automático», TextPik conserva la detección ligera actual. Una "
+            "preferencia explícita evita abrir la aplicación o dispositivo equivocado.",
+            self,
+        )
+        applications_note.setWordWrap(True)
+        applications_note.setObjectName("mutedText")
+        applications_form.addRow("", applications_note)
+        self.applications_status = QLabel(
+            "Pulsa Verificar para detectar aplicaciones y dispositivos.", self
+        )
+        self.applications_status.setWordWrap(True)
+        self.applications_status.setObjectName("mutedText")
+        verify_apps = QPushButton("Verificar aplicaciones y dispositivos", self)
+        verify_apps.clicked.connect(self._refresh_integrations)
+        applications_form.addRow("Estado", self.applications_status)
+        applications_form.addRow("", verify_apps)
+        integrations_layout.addWidget(applications_group)
         integrations_layout.addStretch()
         self._populate_torrent_servers()
 
@@ -3700,8 +4163,8 @@ class SettingsDialog(QDialog):
         bar_form.addRow("Pantallas estrechas", self.popup_allow_two_rows)
         bar_note = QLabel(
             "La barra muestra como mínimo 8 acciones cuando están disponibles, "
-            "crece según el límite elegido y se reorganiza automáticamente al "
-            "ancho de la pantalla. Más acciones contiene todas las acciones "
+            "crece según el límite elegido y conserva el orden manual. Solo distribuye "
+            "los iconos en filas según el ancho de pantalla. Más acciones contiene todas las acciones "
             "activas que no estén visibles directamente en la barra.",
             self,
         )
@@ -3927,6 +4390,184 @@ class SettingsDialog(QDialog):
         s.setValue(val)
         return s
 
+    @staticmethod
+    def _select_combo_data(combo, value):
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+
+    @staticmethod
+    def _replace_editable_combo(combo, values, current):
+        combo.blockSignals(True)
+        combo.clear()
+        for value in dict.fromkeys(values):
+            combo.addItem(value)
+        combo.setCurrentText(current)
+        combo.blockSignals(False)
+
+    @staticmethod
+    def _editable_combo_value(combo):
+        text = combo.currentText().strip()
+        index = combo.currentIndex()
+        if index >= 0 and text == combo.itemText(index):
+            return combo.itemData(index) or text
+        return text
+
+    def _refresh_integrations(self):
+        """Explicit bounded probe; never runs on the popup hot path."""
+        if getattr(self, "_integration_probe_worker", None) is not None:
+            return
+        request = {
+            "preferred_ollama_model": self.ollama_model.currentText().strip(),
+            "ollama_endpoint": self.ollama_endpoint.text().strip(),
+            "grammar_endpoint": self.languagetool_endpoint.text().strip(),
+            "preferred_spelling_language": self.spelling_language.currentText().strip(),
+        }
+        self.local_ai_status.setText("Verificando servicios…")
+        self.applications_status.setText("Detectando aplicaciones y dispositivos…")
+
+        def task():
+            return {
+                "capabilities": probe_runtime_capabilities(**request),
+                "devices": kdeconnect_devices(),
+                "printers": cups_printers(),
+                "players": available_commands(
+                    ("mpv", "vlc", "celluloid", "haruna", "smplayer")
+                ),
+                "terminals": available_commands(
+                    ("konsole", "gnome-terminal", "kgx", "xfce4-terminal",
+                     "mate-terminal", "kitty", "alacritty", "xterm")
+                ),
+                "voices": available_commands(("spd-say", "espeak-ng", "espeak")),
+                "browsers": available_commands(
+                    ("firefox", "chromium", "google-chrome", "brave-browser", "microsoft-edge")
+                ),
+            }
+
+        worker = FunctionWorker(task)
+        self._integration_probe_worker = worker
+        worker.signals.succeeded.connect(self._apply_integration_probe)
+        worker.signals.failed.connect(self._integration_probe_failed)
+        worker.signals.finished.connect(self._finish_integration_probe)
+        if hasattr(self.controller, "_start_worker"):
+            self.controller._start_worker(worker)
+        else:
+            QThreadPool.globalInstance().start(worker)
+
+    def _apply_integration_probe(self, result):
+        capabilities = result["capabilities"]
+        self._replace_editable_combo(
+            self.ollama_model, ("", *capabilities.ollama_models),
+            self.ollama_model.currentText(),
+        )
+        self._replace_editable_combo(
+            self.grammar_language, ("auto", *capabilities.grammar_languages),
+            self.grammar_language.currentText(),
+        )
+        self._replace_editable_combo(
+            self.ocr_languages, ("auto", *capabilities.ocr_languages),
+            self.ocr_languages.currentText(),
+        )
+        devices = result["devices"]
+        current_device = self._editable_combo_value(self.kdeconnect_device)
+        self.kdeconnect_device.clear()
+        self.kdeconnect_device.addItem("auto", "auto")
+        for device_id, name in devices:
+            self.kdeconnect_device.addItem(f"{name} · {device_id}", device_id)
+        device_index = self.kdeconnect_device.findData(current_device)
+        if device_index >= 0:
+            self.kdeconnect_device.setCurrentIndex(device_index)
+        else:
+            self.kdeconnect_device.setCurrentText(current_device)
+        printers = result["printers"]
+        self._replace_editable_combo(
+            self.printer, ("auto", *printers), self._editable_combo_value(self.printer)
+        )
+        self.local_ai_status.setText(
+            " · ".join(
+                (
+                    f"Ollama: {len(capabilities.ollama_models)} modelo(s)"
+                    if capabilities.ollama_models else "Ollama: sin conexión",
+                    f"LanguageTool: {len(capabilities.grammar_languages)} idioma(s)"
+                    if capabilities.grammar_ready else "LanguageTool: sin conexión",
+                    f"Diccionario: {capabilities.spelling_language or 'no disponible'}",
+                )
+            )
+        )
+        self.applications_status.setText(
+            f"Reproductores: {', '.join(result['players']) or 'ninguno'} · "
+            f"Terminales: {', '.join(result['terminals']) or 'ninguna'} · "
+            f"Móviles: {len(devices)} · Impresoras: {len(printers)} · "
+            f"Voz: {', '.join(result['voices']) or 'no disponible'} · "
+            f"Navegadores: {', '.join(result['browsers']) or 'predeterminado del sistema'}"
+        )
+        warnings = []
+        for label, selected, available in (
+            ("reproductor", self.media_player.currentData(), result["players"]),
+            ("terminal", self.terminal_app.currentData(), result["terminals"]),
+            ("voz", self.speech_engine.currentData(), result["voices"]),
+            ("navegador", self.browser_app.currentData(), result["browsers"]),
+        ):
+            if selected != "auto" and selected not in available:
+                warnings.append(f"{label} «{selected}» no disponible")
+        selected_printer = self._editable_combo_value(self.printer)
+        if selected_printer != "auto" and selected_printer not in printers:
+            warnings.append(f"impresora «{selected_printer}» no disponible")
+        if warnings:
+            self.applications_status.setText(
+                self.applications_status.text() + "\nRevisar: " + "; ".join(warnings)
+            )
+
+    def _integration_probe_failed(self, message):
+        self.local_ai_status.setText(f"No se pudo verificar: {message}")
+        self.applications_status.setText("La detección no pudo completarse.")
+
+    def _finish_integration_probe(self):
+        self._integration_probe_worker = None
+
+    def _validate_integrations(self):
+        candidate = dict(self.settings)
+        candidate.update(
+            {
+                "ollama_endpoint": self.ollama_endpoint.text().strip(),
+                "ollama_model": self.ollama_model.currentText().strip(),
+                "languagetool_endpoint": self.languagetool_endpoint.text().strip(),
+                "grammar_language": self.grammar_language.currentText().strip(),
+                "spelling_language": self.spelling_language.currentText().strip(),
+                "ocr_languages": self.ocr_languages.currentText().strip(),
+                "kdeconnect_device": self._editable_combo_value(
+                    self.kdeconnect_device
+                ),
+                "printer": self._editable_combo_value(self.printer),
+            }
+        )
+        normalized = normalize_settings(candidate)
+        labels = {
+            "ollama_endpoint": "endpoint de Ollama",
+            "ollama_model": "modelo de Ollama",
+            "languagetool_endpoint": "endpoint de LanguageTool",
+            "grammar_language": "idioma gramatical",
+            "spelling_language": "diccionario ortográfico",
+            "ocr_languages": "idiomas OCR",
+            "kdeconnect_device": "dispositivo KDE Connect",
+            "printer": "impresora",
+        }
+        invalid = [
+            label for key, label in labels.items()
+            if candidate[key] != normalized[key]
+            and not (key == "ollama_model" and not candidate[key] and normalized[key] == "")
+        ]
+        if invalid:
+            QMessageBox.warning(
+                self, "Integración inválida",
+                "Revisa: " + ", ".join(invalid) + ". Los cambios no se guardaron.",
+            )
+            return False
+        return True
+
+    def accept(self):
+        if self._validate_integrations():
+            super().accept()
+
     def _make_swatch(self, grid, row, col, key, label):
         container = QWidget(self)
         h = QHBoxLayout(container)
@@ -4014,7 +4655,7 @@ class SettingsDialog(QDialog):
     def _populate_context_profiles(self):
         self.context_profiles_list.clear()
         for profile in self.context_profiles:
-            scope = profile.get("application") or ", ".join(
+            scope = ", ".join(profile.get("applications", [])) or ", ".join(
                 profile.get("text_types", [])
             )
             item = QListWidgetItem(
@@ -4058,6 +4699,61 @@ class SettingsDialog(QDialog):
         if row >= 0:
             self.context_profiles.pop(row)
             self._populate_context_profiles()
+
+    def _developer_profile_template(self):
+        command_order = (
+            "copy", "format-json", "decode-jwt", "sha256", "compare-clipboard",
+            "clean-terminal", "json-string-escape", "code-fence",
+            "base64-encode", "url-encode", "html-escape", "terminal", "ollama",
+        )
+        by_command = {
+            action.get("cmd"): action.get("id", action.get("cmd"))
+            for action in self.actions
+        }
+        return {
+            "name": "Modo programador",
+            "application": "",
+            "applications": [
+                "code", "codium", "vscodium", "jetbrains", "pycharm", "idea",
+                "webstorm", "clion", "zed", "sublime", "kate", "neovim",
+                "terminal", "konsole", "alacritty", "kitty",
+            ],
+            "text_types": ["code", "json", "error", "path", "ip", "hash", "uuid", "jwt"],
+            "action_ids": [
+                by_command[command] for command in command_order if command in by_command
+            ],
+            "mode": "developer",
+        }
+
+    def _create_developer_profile(self):
+        self._sync_context_profiles_from_list()
+        existing = next(
+            (index for index, profile in enumerate(self.context_profiles)
+             if profile.get("mode") == "developer"),
+            None,
+        )
+        if existing is None:
+            self.context_profiles.append(self._developer_profile_template())
+            existing = len(self.context_profiles) - 1
+        self.context_profiles_enabled.setChecked(True)
+        self.developer_mode.setChecked(True)
+        self._populate_context_profiles()
+        self.context_profiles_list.setCurrentRow(existing)
+
+    def _duplicate_context_profile(self):
+        self._sync_context_profiles_from_list()
+        row = self.context_profiles_list.currentRow()
+        if not 0 <= row < len(self.context_profiles):
+            return
+        duplicate = dict(self.context_profiles[row])
+        duplicate["name"] = f"{duplicate.get('name', 'Perfil')} — copia"
+        duplicate["mode"] = "custom"
+        duplicate["action_ids"] = list(duplicate.get("action_ids", []))
+        duplicate["text_types"] = list(duplicate.get("text_types", []))
+        duplicate["applications"] = list(duplicate.get("applications", []))
+        self.context_profiles.insert(row + 1, duplicate)
+        self._populate_context_profiles()
+        self.context_profiles_list.setCurrentRow(row + 1)
 
     def _add_blocked_app(self):
         from PySide6.QtWidgets import QInputDialog
@@ -4249,15 +4945,39 @@ class SettingsDialog(QDialog):
     def _populate_torrent_servers(self):
         self.torrent_servers_list.clear()
         for server in self.torrent_servers:
-            kind = "qBittorrent" if server.get("type") == "qbittorrent" else "Transmission"
+            kind = {
+                "qbittorrent": "qBittorrent",
+                "transmission": "Transmission",
+                "browser": "Userscript",
+            }.get(server.get("type"), "Servidor")
+            if server.get("type") == "browser":
+                destination = server.get("script_name") or server.get(
+                    "browser_url_template", ""
+                )
+            else:
+                destination = server.get("endpoint", "")
+            default_hint = "  ·  Predeterminado" if server.get("default") else ""
             self.torrent_servers_list.addItem(
-                f"{server.get('name', 'Servidor')}  ·  {kind}  ·  {server.get('endpoint', '')}"
+                f"{server.get('name', 'Servidor')}  ·  {kind}  ·  {destination}{default_hint}"
             )
+
+    def _set_torrent_server(self, server, row=None):
+        server = protect_torrent_server_credentials(server)
+        if server.get("default"):
+            for existing in self.torrent_servers:
+                existing["default"] = False
+        if row is None:
+            self.torrent_servers.append(server)
+        else:
+            previous = self.torrent_servers[row]
+            if previous.get("password_ref") != server.get("password_ref"):
+                self._obsolete_torrent_credentials.append(previous)
+            self.torrent_servers[row] = server
 
     def _add_torrent_server(self):
         dialog = TorrentServerDialog(parent=self)
         if dialog.exec() == QDialog.Accepted:
-            self.torrent_servers.append(dialog.value())
+            self._set_torrent_server(dialog.value())
             self._populate_torrent_servers()
 
     def _edit_torrent_server(self):
@@ -4265,19 +4985,24 @@ class SettingsDialog(QDialog):
         if 0 <= row < len(self.torrent_servers):
             dialog = TorrentServerDialog(self.torrent_servers[row], self)
             if dialog.exec() == QDialog.Accepted:
-                self.torrent_servers[row] = dialog.value()
+                self._set_torrent_server(dialog.value(), row)
                 self._populate_torrent_servers()
                 self.torrent_servers_list.setCurrentRow(row)
 
     def _remove_torrent_server(self):
         row = self.torrent_servers_list.currentRow()
         if 0 <= row < len(self.torrent_servers):
+            self._obsolete_torrent_credentials.append(self.torrent_servers[row])
             self.torrent_servers.pop(row)
             self._populate_torrent_servers()
 
     def collect_settings(self):
         self._sync_enabled_from_list()
         self._sync_context_profiles_from_list()
+        if self.developer_mode.isChecked() and not any(
+            profile.get("mode") == "developer" for profile in self.context_profiles
+        ):
+            self.context_profiles.append(self._developer_profile_template())
         self.settings["popup_icon_size"] = self.icon_size.value()
         self.settings["popup_button_padding"] = self.button_padding.value()
         self.settings["popup_spacing"] = self.popup_spacing.value()
@@ -4291,7 +5016,32 @@ class SettingsDialog(QDialog):
         self.settings["popup_position_preference"] = (
             self.position_preference.currentData()
         )
-        self.settings["torrent_servers"] = [dict(item) for item in self.torrent_servers]
+        self.settings["torrent_servers"] = [
+            protect_torrent_server_credentials(item)
+            for item in self.torrent_servers
+        ]
+        self.settings["torrent_dispatch_mode"] = self.torrent_dispatch_mode.currentData()
+        self.settings["ollama_endpoint"] = self.ollama_endpoint.text().strip()
+        self.settings["ollama_model"] = self.ollama_model.currentText().strip()
+        self.settings["languagetool_endpoint"] = (
+            self.languagetool_endpoint.text().strip()
+        )
+        self.settings["grammar_language"] = self.grammar_language.currentText().strip()
+        self.settings["media_player"] = self.media_player.currentData()
+        self.settings["terminal_app"] = self.terminal_app.currentData()
+        self.settings["kdeconnect_device"] = (
+            self._editable_combo_value(self.kdeconnect_device)
+        )
+        self.settings["ocr_languages"] = self.ocr_languages.currentText().strip()
+        self.settings["speech_engine"] = self.speech_engine.currentData()
+        self.settings["spelling_language"] = self.spelling_language.currentText().strip()
+        self.settings["screenshot_backend"] = self.screenshot_backend.currentData()
+        self.settings["printer"] = self._editable_combo_value(self.printer)
+        self.settings["browser_app"] = self.browser_app.currentData()
+        self.settings["translation_target"] = (
+            self._editable_combo_value(self.translation_target)
+        )
+        self.settings["clipboard_backend"] = self.clipboard_backend.currentData()
         self.settings["confirm_terminal_execution"] = self.confirm_terminal.isChecked()
         self.settings["enable_wayland_polling"] = self.enable_wl_polling.isChecked()
         self.settings["popup_wayland_fallback_top"] = self.fallback_top.value()
@@ -4320,7 +5070,9 @@ class SettingsDialog(QDialog):
         self.settings["history_max_items"] = self.history_max_items.value()
         self.settings["context_profiles_enabled"] = (
             self.context_profiles_enabled.isChecked()
+            or self.developer_mode.isChecked()
         )
+        self.settings["developer_mode"] = self.developer_mode.isChecked()
         self.settings["context_profiles"] = list(self.context_profiles)
         self.settings["adaptive_popup"] = self.adaptive_popup.isChecked()
         self.settings["popup_min_confidence"] = self.popup_min_confidence.value()
@@ -4342,6 +5094,8 @@ class SettingsDialog(QDialog):
         return normalize_settings(self.settings), list(self.actions)
 
     def apply_clicked(self):
+        if not self._validate_integrations():
+            return
         settings, actions = self.collect_settings()
         actions = [
             action
@@ -4353,8 +5107,14 @@ class SettingsDialog(QDialog):
             self.controller.save_actions()
             self.controller.popup.set_actions(actions)
         self.controller.update_settings(settings)
+        self.cleanup_obsolete_credentials()
         write_json_atomic(AUTOMATIONS_FILE, {"automations": self.automations})
         self.controller.reload_automations()
+
+    def cleanup_obsolete_credentials(self):
+        for server in self._obsolete_torrent_credentials:
+            delete_torrent_server_credentials(server)
+        self._obsolete_torrent_credentials.clear()
 
 
 class WorkerSignals(QObject):
@@ -4467,6 +5227,10 @@ class TextPikApp(QObject):
             "ocr-image",
             "ocr-region",
             "format-json",
+            "decode-jwt",
+            "sha256",
+            "json-string-escape",
+            "code-fence",
             "extract-entities",
             "color-details",
             "slugify",
@@ -4551,8 +5315,8 @@ class TextPikApp(QObject):
             ignored=self.settings.get("spelling_ignored_words", []),
             personal=self.settings.get("spelling_personal_words", []),
         )
-        self.grammar = LanguageToolService()
-        self.ollama = OllamaProvider()
+        self.grammar = LanguageToolService(self.settings["languagetool_endpoint"])
+        self.ollama = OllamaProvider(self.settings["ollama_endpoint"])
         self.ocr = TesseractProvider()
         self.undo = UndoManager()
         self.history = HistoryStore(
@@ -4764,7 +5528,14 @@ class TextPikApp(QObject):
                 "compositor_anchor": anchor,
             }
             if capability_due:
-                snapshot["capabilities"] = probe_runtime_capabilities()
+                snapshot["capabilities"] = probe_runtime_capabilities(
+                    preferred_ollama_model=settings.get("ollama_model", ""),
+                    ollama_endpoint=settings.get("ollama_endpoint", ""),
+                    grammar_endpoint=settings.get("languagetool_endpoint", ""),
+                    preferred_spelling_language=settings.get(
+                        "spelling_language", "auto"
+                    ),
+                )
             return snapshot
 
         worker = FunctionWorker(task)
@@ -5112,6 +5883,8 @@ class TextPikApp(QObject):
             ignored=self.settings.get("spelling_ignored_words", []),
             personal=self.settings.get("spelling_personal_words", []),
         )
+        self.grammar = LanguageToolService(self.settings["languagetool_endpoint"])
+        self.ollama = OllamaProvider(self.settings["ollama_endpoint"])
         self.history = HistoryStore(
             HISTORY_FILE,
             maximum=self.settings.get("history_max_items", 100),
@@ -5201,6 +5974,8 @@ class TextPikApp(QObject):
             ignored=self.settings.get("spelling_ignored_words", []),
             personal=self.settings.get("spelling_personal_words", []),
         )
+        self.grammar = LanguageToolService(self.settings["languagetool_endpoint"])
+        self.ollama = OllamaProvider(self.settings["ollama_endpoint"])
         self.history = HistoryStore(
             HISTORY_FILE,
             maximum=self.settings.get("history_max_items", 100),
@@ -5298,6 +6073,7 @@ class TextPikApp(QObject):
                 self.save_actions()
                 self.popup.set_actions(actions)
             self.update_settings(settings)
+            dialog.cleanup_obsolete_credentials()
 
     def request_cursor_update(self):
         if not is_qt_wayland() or not is_kde() or not qt_dbus_available():
@@ -5494,8 +6270,13 @@ class TextPikApp(QObject):
             )
             profile = None
             if self.settings.get("context_profiles_enabled", False):
+                profiles = self.settings.get("context_profiles", [])
+                if not self.settings.get("developer_mode", False):
+                    profiles = [
+                        item for item in profiles if item.get("mode") != "developer"
+                    ]
                 profile = resolve_profile(
-                    self.settings.get("context_profiles", []), snapshot
+                    profiles, snapshot
                 )
             self._last_context_profile = profile.name if profile else ""
             planning_started = self.performance.start()
@@ -5510,6 +6291,8 @@ class TextPikApp(QObject):
                 context_aware=context_aware,
                 allowed_action_ids=profile.action_ids if profile else None,
             )
+            if profile is not None:
+                visible = apply_profile_order(visible, profile.action_ids)
             self.performance.observe("action-planning", planning_started)
             if not visible:
                 logger.info("Popup omitido: no hay acciones habilitadas")
@@ -5633,6 +6416,16 @@ class TextPikApp(QObject):
             dbus_services=self._desktop_dbus_services(),
             history_enabled=self.settings.get("history_enabled", False),
             capabilities=self._runtime_snapshot.get("capabilities"),
+            preferred_media_player=self.settings.get("media_player", "auto"),
+            preferred_terminal=self.settings.get("terminal_app", "auto"),
+            preferred_speech_engine=self.settings.get("speech_engine", "auto"),
+            preferred_ocr_languages=self.settings.get("ocr_languages", "auto"),
+            preferred_screenshot_backend=self.settings.get(
+                "screenshot_backend", "auto"
+            ),
+            preferred_printer=self.settings.get("printer", "auto"),
+            preferred_browser=self.settings.get("browser_app", "auto"),
+            clipboard_backend=self.settings.get("clipboard_backend", "auto"),
         )
 
     def pin_action(self, action_id):
@@ -5749,7 +6542,9 @@ class TextPikApp(QObject):
 
         if cmd == "open-media-player":
             try:
-                argv, player = media_player_command(text)
+                argv, player = media_player_command(
+                    text, self.settings.get("media_player", "auto")
+                )
                 subprocess.Popen(argv)
                 self._show_toast(f"Abriendo en {player.removesuffix('.desktop')}")
             except (OSError, RuntimeError, ValueError) as exc:
@@ -5769,22 +6564,37 @@ class TextPikApp(QObject):
                     "Añade un servidor Transmission o qBittorrent en Configuración → Integraciones.",
                 )
                 return
-            server = servers[0]
-            if len(servers) > 1:
-                labels = [item["name"] for item in servers]
+            mode = self.settings.get("torrent_dispatch_mode", "ask")
+            targets = []
+            if mode == "all":
+                targets = list(servers)
+            elif mode == "default":
+                targets = [
+                    next(
+                        (item for item in servers if item.get("default")),
+                        servers[0],
+                    )
+                ]
+            elif len(servers) > 1:
+                server_types = {
+                    "qbittorrent": "qBittorrent",
+                    "transmission": "Transmission",
+                    "browser": "Userscript",
+                }
+                labels = [
+                    f"{item['name']} · {server_types.get(item.get('type'), 'Flujo')}"
+                    for item in servers
+                ]
                 selected, accepted = QInputDialog.getItem(
                     None, "Enviar magnet", "Servidor:", labels, 0, False
                 )
                 if not accepted:
                     return
-                server = servers[labels.index(selected)]
-            self._show_toast(f"Enviando magnet a {server['name']}…")
-            worker = FunctionWorker(lambda: send_magnet_to_server(server, magnet))
-            worker.signals.succeeded.connect(self._show_toast)
-            worker.signals.failed.connect(
-                lambda message: QMessageBox.warning(None, "Servidor torrent", message)
-            )
-            self._start_worker(worker)
+                targets = [servers[labels.index(selected)]]
+            else:
+                targets = [servers[0]]
+            for server in targets:
+                self._dispatch_magnet_workflow(server, magnet)
             return
 
         if cmd in TRANSFORMS:
@@ -5871,11 +6681,39 @@ class TextPikApp(QObject):
             )
             return
 
-        if cmd == "speak":
-            executable = next(
-                (name for name in ("spd-say", "espeak-ng", "espeak") if check_command(name)),
-                None,
+        if cmd == "sha256":
+            try:
+                digest = sha256_digest(text)
+            except ValueError as exc:
+                self.popup.show_inline_result("SHA-256", str(exc))
+                return
+            QApplication.clipboard().setText(digest)
+            self.popup.show_inline_result(
+                "SHA-256", digest, "Hash copiado al portapapeles"
             )
+            return
+
+        if cmd == "decode-jwt":
+            try:
+                decoded = decode_jwt(text)
+            except ValueError as exc:
+                self.popup.show_inline_result("JWT inválido", str(exc))
+                return
+            QApplication.clipboard().setText(decoded)
+            self.popup.show_inline_result(
+                "JWT decodificado", decoded[:800],
+                "Contenido copiado · la firma no fue verificada",
+            )
+            return
+
+        if cmd == "speak":
+            preferred_speech = self.settings.get("speech_engine", "auto")
+            candidates = (
+                (preferred_speech,)
+                if preferred_speech != "auto"
+                else ("spd-say", "espeak-ng", "espeak")
+            )
+            executable = next((name for name in candidates if check_command(name)), None)
             if executable is None:
                 self._show_toast("No hay motor de voz instalado")
                 return
@@ -5987,6 +6825,9 @@ class TextPikApp(QObject):
                 return
 
         try:
+            if cmd.startswith("xdg-open 'https://translate.google.com/"):
+                target = self.settings.get("translation_target", "es")
+                cmd = cmd.replace("tl=es", f"tl={target}")
             argv = build_command_argv(cmd, text)
         except ValueError as exc:
             QMessageBox.warning(None, "Comando invalido", str(exc))
@@ -5995,7 +6836,15 @@ class TextPikApp(QObject):
         if argv:
             try:
                 if argv[0] == "xdg-open" and len(argv) == 2:
-                    if not QDesktopServices.openUrl(QUrl.fromUserInput(argv[1])):
+                    browser = self.settings.get("browser_app", "auto")
+                    if browser != "auto":
+                        executable = shutil.which(browser)
+                        if not executable:
+                            raise RuntimeError(
+                                f"El navegador configurado no está instalado: {browser}"
+                            )
+                        subprocess.Popen([executable, argv[1]])
+                    elif not QDesktopServices.openUrl(QUrl.fromUserInput(argv[1])):
                         raise RuntimeError("El escritorio rechazó el recurso")
                 else:
                     subprocess.Popen(argv)
@@ -6004,6 +6853,26 @@ class TextPikApp(QObject):
                 QMessageBox.warning(
                     None, "Error", f"No se pudo ejecutar el comando:\n{exc}"
                 )
+
+    def _dispatch_magnet_workflow(self, server, magnet):
+        """Run one normalized server workflow without blocking the popup thread."""
+        if server.get("type") == "browser":
+            try:
+                url = build_browser_workflow_url(server, magnet)
+                if not QDesktopServices.openUrl(QUrl(url)):
+                    raise RuntimeError("El navegador rechazó la URL del flujo.")
+            except (RuntimeError, ValueError) as exc:
+                QMessageBox.warning(None, "Flujo de userscript", str(exc))
+                return
+            self._show_toast(f"Flujo abierto en el navegador: {server['name']}")
+            return
+        self._show_toast(f"Enviando magnet a {server['name']}…")
+        worker = FunctionWorker(lambda: send_magnet_to_server(server, magnet))
+        worker.signals.succeeded.connect(self._show_toast)
+        worker.signals.failed.connect(
+            lambda message: QMessageBox.warning(None, "Servidor torrent", message)
+        )
+        self._start_worker(worker)
 
     def _check_spelling(self, text):
         """Resolve spelling only after an explicit action, outside the hot path."""
@@ -6021,6 +6890,9 @@ class TextPikApp(QObject):
             text,
             os.environ.get("LANG", "").split(".", 1)[0],
         )
+        preferred_language = self.settings.get("spelling_language", "auto")
+        if preferred_language != "auto":
+            languages = (preferred_language,)
         self._show_toast("Revisando ortografía…")
         worker = FunctionWorker(lambda: self.spelling.suggest(word, languages))
         worker.signals.succeeded.connect(
@@ -6180,8 +7052,7 @@ class TextPikApp(QObject):
         if not filename:
             return
         self._show_toast("Reconociendo texto localmente…")
-        capabilities = self._runtime_snapshot.get("capabilities")
-        languages = "+".join(capabilities.ocr_languages) if capabilities else "eng"
+        languages = self._configured_ocr_languages()
         worker = FunctionWorker(
             lambda: self.ocr.recognize(Path(filename), languages=languages)
         )
@@ -6214,13 +7085,14 @@ class TextPikApp(QObject):
         def capture_and_recognize():
             with tempfile.TemporaryDirectory(prefix="textpik-ocr-") as temporary:
                 target = Path(temporary) / "region.png"
-                if shutil.which("spectacle"):
+                preferred = self.settings.get("screenshot_backend", "auto")
+                if preferred in {"auto", "spectacle"} and shutil.which("spectacle"):
                     command = ["spectacle", "-r", "-b", "-n", "-o", str(target)]
                     subprocess.run(command, timeout=90, check=True)
-                elif shutil.which("gnome-screenshot"):
+                elif preferred in {"auto", "gnome-screenshot"} and shutil.which("gnome-screenshot"):
                     command = ["gnome-screenshot", "-a", "-f", str(target)]
                     subprocess.run(command, timeout=90, check=True)
-                elif shutil.which("slurp") and shutil.which("grim"):
+                elif preferred in {"auto", "grim-slurp"} and shutil.which("slurp") and shutil.which("grim"):
                     region = subprocess.run(
                         ["slurp"], capture_output=True, text=True, timeout=90, check=True
                     ).stdout.strip()
@@ -6229,17 +7101,14 @@ class TextPikApp(QObject):
                     subprocess.run(
                         ["grim", "-g", region, str(target)], timeout=20, check=True
                     )
-                elif portal_available:
+                elif preferred in {"auto", "portal"} and portal_available:
                     capture_xdg_screenshot(target, timeout_seconds=90)
                 else:
                     raise RuntimeError(
                         "No hay adaptador de captura: instala Spectacle, "
                         "gnome-screenshot, grim+slurp o XDG Screenshot Portal"
                     )
-                capabilities = self._runtime_snapshot.get("capabilities")
-                languages = (
-                    "+".join(capabilities.ocr_languages) if capabilities else "eng"
-                )
+                languages = self._configured_ocr_languages()
                 return self.ocr.recognize(target, languages=languages)
 
         self._show_toast("Selecciona una región para OCR…")
@@ -6256,7 +7125,8 @@ class TextPikApp(QObject):
         context = self.selection_context
         session_id = self._selection_session
         self._show_toast("Revisando gramática con LanguageTool…")
-        worker = FunctionWorker(lambda: self.grammar.check(text, "auto"))
+        language = self.settings.get("grammar_language", "auto")
+        worker = FunctionWorker(lambda: self.grammar.check(text, language))
         worker.signals.succeeded.connect(
             lambda suggestions: self._show_grammar_result(
                 text, suggestions, context, session_id
@@ -6265,7 +7135,7 @@ class TextPikApp(QObject):
         worker.signals.failed.connect(
             lambda message: self.popup.show_inline_result(
                 "LanguageTool no disponible",
-                "Inicia el servidor local en 127.0.0.1:8010.",
+                "Revisa el servidor configurado en Configuración → Integraciones.",
                 message,
             )
         )
@@ -6334,9 +7204,12 @@ class TextPikApp(QObject):
                 ) as file:
                     file.write(text)
                     path = file.name
-                result = subprocess.run(
-                    ["lp", path], capture_output=True, text=True, timeout=15
-                )
+                argv = ["lp"]
+                printer = self.settings.get("printer", "auto")
+                if printer != "auto":
+                    argv.extend(("-d", printer))
+                argv.append(path)
+                result = subprocess.run(argv, capture_output=True, text=True, timeout=15)
                 if result.returncode != 0:
                     raise RuntimeError(
                         result.stderr.strip() or "La impresora rechazó el trabajo."
@@ -6357,16 +7230,14 @@ class TextPikApp(QObject):
         )
         self._start_worker(worker)
 
+    def _configured_ocr_languages(self):
+        configured = self.settings.get("ocr_languages", "auto")
+        if configured != "auto":
+            return configured
+        capabilities = self._runtime_snapshot.get("capabilities")
+        return "+".join(capabilities.ocr_languages) if capabilities else "eng"
+
     def query_ollama(self, text):
-        if not shutil.which("ollama"):
-            QMessageBox.information(
-                None,
-                "Ollama no instalado",
-                "Ollama no está instalado en el sistema.\n\n"
-                "Instalalo desde: https://ollama.com/download\n"
-                "O con: curl -fsSL https://ollama.com/install.sh | sh",
-            )
-            return
 
         from PySide6.QtWidgets import QInputDialog
 
@@ -6383,7 +7254,9 @@ class TextPikApp(QObject):
         if not accepted:
             return
         capabilities = self._runtime_snapshot.get("capabilities")
-        model = capabilities.ollama_model if capabilities else ""
+        model = self.settings.get("ollama_model", "")
+        if not model:
+            model = capabilities.ollama_model if capabilities else ""
         if not model:
             QMessageBox.information(
                 None,
@@ -6476,11 +7349,17 @@ class TextPikApp(QObject):
                 ).stdout.split()
                 if not devices:
                     raise RuntimeError("No hay dispositivos disponibles")
+                preferred = self.settings.get("kdeconnect_device", "auto")
+                device = devices[0] if preferred == "auto" else preferred
+                if device not in devices:
+                    raise RuntimeError(
+                        "El dispositivo KDE Connect configurado no está disponible"
+                    )
                 result = subprocess.run(
                     [
                         "kdeconnect-cli",
                         "--device",
-                        devices[0],
+                        device,
                         "--share-text",
                         text,
                     ],
@@ -6492,7 +7371,7 @@ class TextPikApp(QObject):
                     raise RuntimeError(
                         result.stderr.strip() or "KDE Connect rechazó el texto"
                     )
-                return devices[0]
+                return device
 
             worker = FunctionWorker(task)
             worker.signals.succeeded.connect(
@@ -6525,6 +7404,13 @@ class TextPikApp(QObject):
             devices = _re.findall(r'<node name="([^"]+)"/>', xml)
             if not devices:
                 raise Exception("No hay dispositivos emparejados")
+            preferred = self.settings.get("kdeconnect_device", "auto")
+            if preferred != "auto":
+                if preferred not in devices:
+                    raise Exception(
+                        "El dispositivo KDE Connect configurado no está disponible"
+                    )
+                devices = [preferred]
             sent = False
             for dev_id in devices:
                 cli_iface = QDBusInterface(
@@ -6550,6 +7436,12 @@ class TextPikApp(QObject):
             clipboard.setText(previous_clipboard, QClipboard.Mode.Clipboard)
 
     def _klipper_save(self, text):
+        if self._use_textpik_clipboard_backend():
+            if self.history.add(text, self.selection_context.application):
+                self._show_toast("Guardado en el historial privado de TextPik")
+            else:
+                self._show_toast("El texto sensible o vacío no se guardó")
+            return
         try:
             from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 
@@ -6572,6 +7464,9 @@ class TextPikApp(QObject):
             )
 
     def _klipper_show_menu(self):
+        if self._use_textpik_clipboard_backend():
+            self._show_private_history()
+            return
         try:
             from PySide6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage
 
@@ -6592,6 +7487,14 @@ class TextPikApp(QObject):
                 "Klipper",
                 f"No se pudo mostrar el menu de Klipper:\n{exc}",
             )
+
+    def _use_textpik_clipboard_backend(self):
+        backend = self.settings.get("clipboard_backend", "auto")
+        if backend == "textpik":
+            return True
+        if backend == "klipper":
+            return False
+        return "org.kde.klipper" not in self._desktop_dbus_services()
 
     def _detect_text_type(self, text):
         return classify_text(text)
@@ -6689,7 +7592,7 @@ exec bash -i
 """.strip()
 
         terminal_argv = None
-        for name, argv in (
+        terminal_candidates = (
             ("konsole", ["konsole", "-e", "bash", "-lc", script]),
             ("gnome-terminal", ["gnome-terminal", "--", "bash", "-lc", script]),
             ("kgx", ["kgx", "--", "bash", "-lc", script]),
@@ -6705,7 +7608,13 @@ exec bash -i
                 "x-terminal-emulator",
                 ["x-terminal-emulator", "-e", "bash", "-lc", script],
             ),
-        ):
+        )
+        preferred_terminal = self.settings.get("terminal_app", "auto")
+        if preferred_terminal != "auto":
+            terminal_candidates = tuple(
+                item for item in terminal_candidates if item[0] == preferred_terminal
+            )
+        for name, argv in terminal_candidates:
             if check_command(name):
                 terminal_argv = argv
                 break

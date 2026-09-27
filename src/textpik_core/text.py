@@ -106,6 +106,9 @@ def classify_text(text: str) -> frozenset[str]:
         types.add("uuid")
     if re.fullmatch(r"[0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", stripped):
         types.add("hash")
+    if re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*", stripped):
+        types.add("jwt")
+        types.add("code")
     if stripped[:1] in "[{" and stripped[-1:] in "]}":
         try:
             json.loads(stripped)

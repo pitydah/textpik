@@ -51,17 +51,18 @@ def plan_actions(
     *,
     context_aware: bool = True,
     is_available: Callable[[Mapping], bool] | None = None,
-    allowed_action_ids: frozenset[str] | None = None,
+    allowed_action_ids: Iterable[str] | None = None,
 ) -> list[Mapping]:
     """Filter actions while preserving the exact order chosen by the user."""
     available = is_available or (lambda _action: True)
+    allowed = set(allowed_action_ids) if allowed_action_ids is not None else None
     planned = []
     for action in actions:
         action_id = action.get("id", action.get("cmd", ""))
         pinned = bool(action.get("pinned", False))
         if (
-            allowed_action_ids is not None
-            and action_id not in allowed_action_ids
+            allowed is not None
+            and action_id not in allowed
             and not pinned
         ):
             continue
@@ -90,6 +91,27 @@ def plan_actions(
             continue
         planned.append(action)
     return planned
+
+
+def apply_profile_order(
+    actions: Iterable[Mapping], action_ids: Iterable[str]
+) -> list[Mapping]:
+    """Apply a profile's explicit order while retaining unlisted pinned actions."""
+    actions = list(actions)
+    positions = {action_id: index for index, action_id in enumerate(action_ids)}
+    pinned = [
+        action for action in actions
+        if bool(action.get("pinned"))
+        and action.get("id", action.get("cmd", "")) not in positions
+    ]
+    ordered = sorted(
+        (
+            action for action in actions
+            if action.get("id", action.get("cmd", "")) in positions
+        ),
+        key=lambda action: positions[action.get("id", action.get("cmd", ""))],
+    )
+    return pinned + ordered
 
 
 def order_actions_for_popup(

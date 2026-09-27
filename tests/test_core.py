@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QTimer, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QTabWidget
 
 from src.textpik import (
@@ -107,6 +108,40 @@ class CoreHelpersTest(unittest.TestCase):
     def test_worker_is_not_auto_deleted_in_its_thread(self):
         worker = FunctionWorker(lambda: "ok")
         self.assertFalse(worker.autoDelete())
+
+    def test_torrent_dispatch_can_use_default_or_all_workflows(self):
+        magnet = "magnet:?xt=urn:btih:" + "a" * 40
+        first = {
+            "name": "Uno",
+            "type": "transmission",
+            "endpoint": "http://one.local",
+        }
+        second = {
+            "name": "Dos",
+            "type": "browser",
+            "browser_url_template": "https://two.local/add?magnet={magnet}",
+            "default": True,
+        }
+        dispatch = Mock()
+        controller = SimpleNamespace(
+            actions=[{"cmd": "send-magnet", "variants": {}, "permissions": []}],
+            settings={
+                "torrent_servers": [first, second],
+                "torrent_dispatch_mode": "default",
+            },
+            _authorize_action=lambda _action: True,
+            _dispatch_magnet_workflow=dispatch,
+        )
+        TextPikApp.execute_action(controller, "send-magnet", magnet)
+        dispatch.assert_called_once_with(second, magnet)
+
+        dispatch.reset_mock()
+        controller.settings["torrent_dispatch_mode"] = "all"
+        TextPikApp.execute_action(controller, "send-magnet", magnet)
+        self.assertEqual(
+            dispatch.call_args_list,
+            [unittest.mock.call(first, magnet), unittest.mock.call(second, magnet)],
+        )
 
     def test_diagnostic_report_does_not_include_selected_text(self):
         controller = SimpleNamespace(
@@ -400,6 +435,45 @@ class PopupCompositionTest(unittest.TestCase):
         self.assertEqual(center.alpha(), 255)
         self.assertGreater(center.lightness(), 0)
 
+    def test_palette_executes_an_action_with_one_left_click(self):
+        palette = ActionPalette()
+        action = next(item for item in DEFAULT_ACTIONS if item["cmd"] == "count")
+        triggered = []
+        palette.action_triggered.connect(triggered.append)
+        palette._actions = [action]
+        palette._populate([action])
+        palette.show()
+        self.app.processEvents()
+
+        item = palette.list.item(0)
+        position = palette.list.visualItemRect(item).center()
+        QTest.mouseClick(palette.list.viewport(), Qt.LeftButton, pos=position)
+        self.app.processEvents()
+
+        self.assertEqual(triggered, ["count"])
+        self.assertFalse(palette.isVisible())
+
+    def test_count_and_calculator_dispatch_information_results(self):
+        popup = Mock()
+        controller = SimpleNamespace(
+            actions=[
+                {"cmd": "count", "variants": {}, "permissions": []},
+                {"cmd": "insight", "variants": {}, "permissions": []},
+            ],
+            popup=popup,
+            _authorize_action=lambda _action: True,
+        )
+
+        TextPikApp.execute_action(controller, "count", "Uno dos tres.")
+        title, value, detail = popup.show_inline_result.call_args.args
+        self.assertEqual(title, "Estadísticas del texto")
+        self.assertIn("3 palabras", value)
+        self.assertIn("1 oraciones", detail)
+
+        popup.reset_mock()
+        TextPikApp.execute_action(controller, "insight", "2 + 2")
+        popup.show_inline_result.assert_called_once_with("Resultado", "4", "")
+
     def test_information_result_uses_an_independent_popup(self):
         toolbar = PopupWindow(DEFAULT_ACTIONS[:8], None, dict(DEFAULT_SETTINGS))
         toolbar.resize(240, 33)
@@ -528,6 +602,7 @@ class PopupCompositionTest(unittest.TestCase):
         settings = dict(DEFAULT_SETTINGS)
         settings["max_popup_actions"] = 12
         settings["popup_compact_actions"] = 8
+        settings["adaptive_popup"] = True
         popup = PopupWindow(DEFAULT_ACTIONS[:4], None, settings)
         popup.show()
         self.app.processEvents()
@@ -594,6 +669,7 @@ class PopupCompositionTest(unittest.TestCase):
         settings = dict(DEFAULT_SETTINGS)
         settings["max_popup_actions"] = 12
         settings["popup_compact_actions"] = 8
+        settings["adaptive_popup"] = True
         actions = DEFAULT_ACTIONS[:15]
         popup = PopupWindow(actions, None, settings)
         popup.set_actions(actions, compact=True)
@@ -692,7 +768,67 @@ class SettingsAboutTest(unittest.TestCase):
         self.assertTrue(dialog.context_profiles_enabled.isChecked())
         self.assertEqual(dialog.context_profiles_list.count(), 1)
         collected, _actions = dialog.collect_settings()
-        self.assertEqual(collected["context_profiles"], settings["context_profiles"])
+        self.assertEqual(collected["context_profiles"][0]["action_ids"], ["copy"])
+        self.assertEqual(collected["context_profiles"][0]["applications"], ["firefox"])
+        dialog.close()
+
+    def test_developer_mode_creates_an_editable_ordered_profile(self):
+        dialog = SettingsDialog(
+            dict(DEFAULT_SETTINGS), DEFAULT_ACTIONS, self._controller()
+        )
+        dialog._create_developer_profile()
+        collected, _actions = dialog.collect_settings()
+        self.assertTrue(collected["developer_mode"])
+        profile = next(
+            item for item in collected["context_profiles"]
+            if item.get("mode") == "developer"
+        )
+        commands = {
+            action.get("id", action.get("cmd")): action.get("cmd")
+            for action in DEFAULT_ACTIONS
+        }
+        ordered_commands = [commands[action_id] for action_id in profile["action_ids"]]
+        self.assertEqual(ordered_commands[:3], ["copy", "format-json", "decode-jwt"])
+        self.assertIn("code", profile["applications"])
+        dialog.close()
+
+    def test_action_integrations_round_trip_through_settings_ui(self):
+        settings = dict(DEFAULT_SETTINGS)
+        settings.update(
+            {
+                "ollama_model": "qwen2.5:3b",
+                "grammar_language": "es-CL",
+                "media_player": "mpv",
+                "terminal_app": "kitty",
+                "kdeconnect_device": "phone-01",
+                "ocr_languages": "spa+eng",
+                "speech_engine": "spd-say",
+                "spelling_language": "es_CL",
+                "screenshot_backend": "portal",
+                "printer": "Office_Printer",
+                "browser_app": "firefox",
+                "translation_target": "en",
+                "clipboard_backend": "textpik",
+            }
+        )
+        dialog = SettingsDialog(settings, DEFAULT_ACTIONS, self._controller())
+        collected, _actions = dialog.collect_settings()
+        for key in (
+            "ollama_model",
+            "grammar_language",
+            "media_player",
+            "terminal_app",
+            "kdeconnect_device",
+            "ocr_languages",
+            "speech_engine",
+            "spelling_language",
+            "screenshot_backend",
+            "printer",
+            "browser_app",
+            "translation_target",
+            "clipboard_backend",
+        ):
+            self.assertEqual(collected[key], settings[key])
         dialog.close()
 
     def test_visual_automation_editor_builds_declarative_flow(self):
