@@ -55,3 +55,9 @@ include = ["textpik_core*"]
 [tool.ruff]
 target-version = "py310"
 line-length = 88
+
+[tool.ruff.lint]
+# Pin the lint contract instead of inheriting ruff's per-version defaults.
+# Ruff 0.16 expanded its default rule set, which turned the CI lint gate red
+# on pre-existing code that had never been checked against those rules.
+select = ["E4", "E7", "E9", "F"]
