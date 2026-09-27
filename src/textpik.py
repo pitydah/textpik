@@ -47,6 +47,11 @@ try:
     from textpik_core.extensions import inspect_local_extensions
     from textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
     from textpik_core.integration import (
+        GRAMMAR_ENDPOINT_INVALID,
+        GRAMMAR_ENDPOINT_REMOTE_BLOCKED,
+        GRAMMAR_ENDPOINT_REMOTE_OPT_IN,
+        GRAMMAR_ENDPOINT_UNREACHABLE,
+        GRAMMAR_ENDPOINT_INSECURE_REMOTE,
         RuntimeCapabilities,
         action_availability,
         available_commands,
@@ -119,6 +124,7 @@ try:
     )
     from textpik_core.storage import read_json, write_json_atomic
     from textpik_core.popup_state import PopupPhase, PopupStateMachine
+    from textpik_core.wayland import build_wayland_profile
     from textpik_core.text import build_command_argv, classify_text, normalize_url
 except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.actions import (
@@ -141,6 +147,11 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.extensions import inspect_local_extensions
     from .textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
     from .textpik_core.integration import (
+        GRAMMAR_ENDPOINT_INVALID,
+        GRAMMAR_ENDPOINT_REMOTE_BLOCKED,
+        GRAMMAR_ENDPOINT_REMOTE_OPT_IN,
+        GRAMMAR_ENDPOINT_UNREACHABLE,
+        GRAMMAR_ENDPOINT_INSECURE_REMOTE,
         RuntimeCapabilities,
         action_availability,
         available_commands,
@@ -215,6 +226,7 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     )
     from .textpik_core.storage import read_json, write_json_atomic
     from .textpik_core.popup_state import PopupPhase, PopupStateMachine
+    from .textpik_core.wayland import build_wayland_profile
     from .textpik_core.text import build_command_argv, classify_text, normalize_url
 
 
@@ -1196,6 +1208,7 @@ class BaseSelectionMonitor(QObject):
         self._force_emit = False
         self._last_emit_text = ""
         self._last_emit_at = 0.0
+        self._last_selection_activity_at = 0.0
         self._suppress_events_until = 0.0
         self._secondary_guard_until = 0.0
         self._revision = 0
@@ -1239,6 +1252,7 @@ class BaseSelectionMonitor(QObject):
         if time.monotonic() < self._suppress_events_until:
             logger.debug("Evento de selección propio ignorado")
             return
+        self.note_selection_activity()
         # Wayland notifications may repeat for the same PRIMARY payload when a
         # context menu opens. A changed payload is sufficient to prove selection.
         revision = self._next_revision()
@@ -1253,14 +1267,53 @@ class BaseSelectionMonitor(QObject):
         state = self._pointer.state()
         return bool(state is not None and state[2] & X11Pointer.SECONDARY_MASK)
 
-    def _primary_button_pressed(self):
-        try:
-            if QApplication.mouseButtons() & Qt.LeftButton:
-                return True
-        except Exception:
-            pass
+    def _primary_button_state(self):
+        # QApplication.mouseButtons() is not a global physical-button query on
+        # Wayland. While selecting in another client, TextPik receives no
+        # authoritative pointer stream, so UNKNOWN is the only truthful state.
+        if is_wayland():
+            return None
         state = self._pointer.state()
-        return bool(state is not None and state[2] & X11Pointer.PRIMARY_MASK)
+        if state is not None:
+            return bool(state[2] & X11Pointer.PRIMARY_MASK)
+        try:
+            return bool(QApplication.mouseButtons() & Qt.LeftButton)
+        except Exception:
+            return None
+
+    def _primary_button_pressed(self):
+        return self._primary_button_state() is True
+
+    def note_selection_activity(self):
+        """Record selection activity so the Wayland quiet period can elapse.
+
+        Every path that observes a fresh selection must call this. On Wayland
+        the pointer state is UNKNOWN, so an unrecorded path would let
+        ``selection_input_ready`` read a zeroed timestamp and always resolve to
+        ready, which is the stale-selection acceptance this guard exists to
+        prevent.
+        """
+        self._last_selection_activity_at = time.monotonic()
+
+    def selection_input_ready(self, quiet_seconds=0.14):
+        # Consult the overridable predicate first so subclasses and tests that
+        # replace _primary_button_pressed still control the decision.
+        if self._primary_button_pressed():
+            return False
+        if self._primary_button_state() is False:
+            return True
+        # A zero timestamp means no selection activity has ever been observed.
+        # CLOCK_MONOTONIC is seconds since boot, so `now - 0.0` is always far
+        # beyond the quiet period and would silently open the gate. No evidence
+        # of activity is not evidence of a finished selection: fail closed.
+        if self._last_selection_activity_at <= 0.0:
+            return False
+        # UNKNOWN pointer state: require a quiet period since the last
+        # selection notification instead of trusting Qt button state.
+        return (
+            time.monotonic() - self._last_selection_activity_at
+            >= float(quiet_seconds)
+        )
 
     def suppress_secondary_interaction(self, milliseconds=900):
         """Cancel pending selections while the desktop owns a context menu."""
@@ -1295,7 +1348,7 @@ class BaseSelectionMonitor(QObject):
         if self.secondary_interaction_active():
             logger.debug("Lectura de selección cancelada por clic secundario")
             return
-        if self._primary_button_pressed():
+        if not self.selection_input_ready():
             self.timer_debounce.start(45)
             return
         self._accept_selection_text(self._read_selection_text(), revision)
@@ -1529,7 +1582,7 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
             return
         if self.secondary_interaction_active():
             return
-        if self._primary_button_pressed():
+        if not self.selection_input_ready():
             self.timer_debounce.start(45)
             return
         if self._wl_read_process is not None and (
@@ -1651,10 +1704,15 @@ class CursorBridge(QObject):
             logger.info("Cursor actualizado via KWin script: %s,%s", x, y)
         logger.debug("Cursor actualizado via KWin script: %s,%s", x, y)
 
-    def notify_click_outside(self):
+    def notify_window_activated(self):
         logger.info("KWin notifico activacion de otra ventana")
-        if hasattr(self, "_on_click_outside") and self._on_click_outside:
-            self._on_click_outside()
+        callback = getattr(self, "_on_window_activated", None)
+        if callback:
+            callback()
+
+    def notify_click_outside(self):
+        """Compatibility alias for bridge 1.1; activation is not a raw click."""
+        self.notify_window_activated()
 
 
 def create_cursor_bridge_adaptor(parent):
@@ -1667,7 +1725,12 @@ def create_cursor_bridge_adaptor(parent):
             parent.update_cursor(x, y)
 
         @Slot()
+        def notifyWindowActivated(self):
+            parent.notify_window_activated()
+
+        @Slot()
         def notifyClickOutside(self):
+            # Compatibility with already-installed bridge 1.1 packages.
             parent.notify_click_outside()
 
     return CursorBridgeAdaptor(parent)
@@ -3935,10 +3998,22 @@ class SettingsDialog(QDialog):
         self.grammar_language.setCurrentText(
             self.settings.get("grammar_language", "auto")
         )
+        self.grammar_allow_remote = QCheckBox(
+            "Permitir servidor LanguageTool remoto", self
+        )
+        self.grammar_allow_remote.setChecked(
+            bool(self.settings.get("grammar_allow_remote", False))
+        )
+        # The opt-in is about data leaving the machine, so the label has to say
+        # what actually happens rather than just naming the host.
+        self.grammar_allow_remote.setToolTip(
+            "El texto enviado a corrección puede salir de este equipo."
+        )
         local_ai_form.addRow("Ollama · endpoint", self.ollama_endpoint)
         local_ai_form.addRow("Ollama · modelo", self.ollama_model)
         local_ai_form.addRow("LanguageTool · endpoint", self.languagetool_endpoint)
         local_ai_form.addRow("LanguageTool · idioma", self.grammar_language)
+        local_ai_form.addRow("", self.grammar_allow_remote)
         self.spelling_language = QComboBox(self)
         self.spelling_language.setEditable(True)
         self.spelling_language.addItem("auto")
@@ -3950,8 +4025,9 @@ class SettingsDialog(QDialog):
         )
         local_ai_form.addRow("Diccionario ortográfico", self.spelling_language)
         local_ai_note = QLabel(
-            "Ollama se limita al equipo local por privacidad. LanguageTool puede "
-            "apuntar a una instancia local o a un servidor HTTPS administrado por ti.",
+            "Ollama se limita al equipo local por privacidad. LanguageTool usa una "
+            "instancia local mientras el permiso remoto esté desactivado; activarlo "
+            "permite un servidor propio, pero exige HTTPS fuera de la red local.",
             self,
         )
         local_ai_note.setWordWrap(True)
@@ -4487,8 +4563,7 @@ class SettingsDialog(QDialog):
                 (
                     f"Ollama: {len(capabilities.ollama_models)} modelo(s)"
                     if capabilities.ollama_models else "Ollama: sin conexión",
-                    f"LanguageTool: {len(capabilities.grammar_languages)} idioma(s)"
-                    if capabilities.grammar_ready else "LanguageTool: sin conexión",
+                    self._grammar_status_text(capabilities),
                     f"Diccionario: {capabilities.spelling_language or 'no disponible'}",
                 )
             )
@@ -4521,6 +4596,34 @@ class SettingsDialog(QDialog):
         self.local_ai_status.setText(f"No se pudo verificar: {message}")
         self.applications_status.setText("La detección no pudo completarse.")
 
+    def _grammar_status_text(self, capabilities) -> str:
+        """Describe the LanguageTool state, naming the actual reason.
+
+        "sin conexión" is wrong for an endpoint the policy refused to contact:
+        nothing was attempted. Telling the user to check their server when the
+        request never left the machine sends them debugging the wrong thing.
+        """
+        if capabilities.grammar_ready:
+            prefix = (
+                "LanguageTool (remoto autorizado)"
+                if capabilities.grammar_endpoint_state
+                == GRAMMAR_ENDPOINT_REMOTE_OPT_IN
+                else "LanguageTool"
+            )
+            return f"{prefix}: {len(capabilities.grammar_languages)} idioma(s)"
+        reason = {
+            GRAMMAR_ENDPOINT_REMOTE_BLOCKED: (
+                "endpoint remoto bloqueado · activa «Permitir servidor "
+                "LanguageTool remoto» para usarlo"
+            ),
+            GRAMMAR_ENDPOINT_INSECURE_REMOTE: (
+                "endpoint remoto requiere HTTPS fuera de la red local"
+            ),
+            GRAMMAR_ENDPOINT_INVALID: "endpoint inválido o vacío",
+            GRAMMAR_ENDPOINT_UNREACHABLE: "sin conexión",
+        }.get(capabilities.grammar_endpoint_state, "no disponible")
+        return f"LanguageTool: {reason}"
+
     def _finish_integration_probe(self):
         self._integration_probe_worker = None
 
@@ -4531,6 +4634,7 @@ class SettingsDialog(QDialog):
                 "ollama_endpoint": self.ollama_endpoint.text().strip(),
                 "ollama_model": self.ollama_model.currentText().strip(),
                 "languagetool_endpoint": self.languagetool_endpoint.text().strip(),
+                "grammar_allow_remote": self.grammar_allow_remote.isChecked(),
                 "grammar_language": self.grammar_language.currentText().strip(),
                 "spelling_language": self.spelling_language.currentText().strip(),
                 "ocr_languages": self.ocr_languages.currentText().strip(),
@@ -5026,6 +5130,7 @@ class SettingsDialog(QDialog):
         self.settings["languagetool_endpoint"] = (
             self.languagetool_endpoint.text().strip()
         )
+        self.settings["grammar_allow_remote"] = self.grammar_allow_remote.isChecked()
         self.settings["grammar_language"] = self.grammar_language.currentText().strip()
         self.settings["media_player"] = self.media_player.currentData()
         self.settings["terminal_app"] = self.terminal_app.currentData()
@@ -5438,7 +5543,7 @@ class TextPikApp(QObject):
                 return
 
             bridge = CursorBridge()
-            bridge._on_click_outside = self._on_kwin_window_activated
+            bridge._on_window_activated = self._on_kwin_window_activated
             adaptor = create_cursor_bridge_adaptor(bridge)
             if not bus.registerObject(
                 CURSOR_BRIDGE_PATH,
@@ -5532,6 +5637,7 @@ class TextPikApp(QObject):
                     preferred_ollama_model=settings.get("ollama_model", ""),
                     ollama_endpoint=settings.get("ollama_endpoint", ""),
                     grammar_endpoint=settings.get("languagetool_endpoint", ""),
+                    grammar_allow_remote=bool(settings.get("grammar_allow_remote")),
                     preferred_spelling_language=settings.get(
                         "spelling_language", "auto"
                     ),
@@ -5644,6 +5750,9 @@ class TextPikApp(QObject):
             self._suppress_popup("secondary-click")
             return
         session_id = self._begin_selection_session("atspi-event")
+        # AT-SPI never routes through _selection_event, so the Wayland quiet
+        # period would otherwise read a zeroed timestamp and always accept.
+        self.monitor.note_selection_activity()
         self._pending_atspi_node = (node, session_id, time.monotonic())
         # Accessibility events can arrive before the final range is committed.
         self.popup_state.transition(PopupPhase.STABILIZING)
@@ -5666,7 +5775,7 @@ class TextPikApp(QObject):
             self._pending_atspi_node = None
             self._suppress_popup("secondary-click")
             return
-        if self.monitor._primary_button_pressed():
+        if not self.monitor.selection_input_ready():
             self.atspi_event_timer.start(45)
             return
         pending, self._pending_atspi_node = self._pending_atspi_node, None
@@ -5679,8 +5788,17 @@ class TextPikApp(QObject):
         context = node if isinstance(node, SelectionContext) else self.atspi.read_selection(node)
         if not self._selection_session_is_current(session_id):
             return
-        if context is None or not context.text.strip():
-            self._monitor_selection_cleared()
+        if context is None:
+            if not self.popup.isVisible():
+                self.popup_state.reset()
+            return
+        if context.sensitive:
+            self.selection_context = context
+            self._suppress_popup("sensitive")
+            return
+        if not context.text.strip():
+            if not self.popup.isVisible():
+                self.popup_state.reset()
             return
         if self.settings.get("adaptive_delay_enabled", True):
             desired = adaptive_selection_delay(
@@ -5741,6 +5859,10 @@ class TextPikApp(QObject):
 
         pointer_state = self.pointer.state()
         if pointer_state is None:
+            if is_qt_wayland():
+                # No global pointer authority here. KDE's bridge handles window
+                # activation separately; other compositors remain degraded.
+                return
             qt_buttons = QApplication.mouseButtons()
             buttons_pressed = qt_buttons != Qt.NoButton
             secondary_pressed = bool(qt_buttons & Qt.RightButton)
@@ -6327,7 +6449,7 @@ class TextPikApp(QObject):
             self._last_popup_text = text
             self._last_popup_at = now
             self._popup_immunity_until = time.monotonic() + 1.25
-            self._selection_released = not self.monitor._primary_button_pressed()
+            self._selection_released = self.monitor.selection_input_ready()
             self.hide_check_timer.start(50)
             auto_hide_ms = self.settings.get("popup_auto_hide_ms", 8000)
             if auto_hide_ms > 0 and not self.popup.is_sticky():
@@ -6352,7 +6474,7 @@ class TextPikApp(QObject):
         ):
             self._suppress_popup("secondary-click")
             return
-        if self.monitor._primary_button_pressed():
+        if not self.monitor.selection_input_ready():
             return
         context = self.atspi.read_selection()
         if context is None:
@@ -7670,6 +7792,16 @@ exec bash -i
         """Return a privacy-safe capability snapshot for support requests."""
         services = self._desktop_dbus_services()
         monitor_name = type(self.monitor).__name__
+        wayland_profile = build_wayland_profile(
+            platform_name=self.app.platformName(),
+            desktop=desktop_environment(),
+            kwin_cursor_bridge=bool(
+                is_qt_wayland() and getattr(self, "cursor_bridge", None)
+            ),
+            kwin_activation_bridge=bool(
+                is_qt_wayland() and getattr(self, "cursor_bridge", None)
+            ),
+        )
         payload = {
             "application": APP_NAME,
             "application_version": APP_VERSION,
@@ -7698,6 +7830,7 @@ exec bash -i
             "xdg_desktop_portal": "org.freedesktop.portal.Desktop" in services,
             "secret_service": "org.freedesktop.secrets" in services,
             "anchor_provider": getattr(self, "_last_anchor_decision", "unknown"),
+            "wayland_capabilities": wayland_profile.as_dict(),
             "previous_run_unclean": bool(
                 getattr(getattr(self, "previous_run", None), "unclean", False)
             ),

@@ -60,7 +60,12 @@ class PackagingTest(unittest.TestCase):
         installer = (ROOT / "packaging/install.sh").read_text(encoding="utf-8")
         self.assertIn("workspace.windowActivated", bridge)
         self.assertIn("workspace.cursorPosChanged", bridge)
-        self.assertIn("!identifyTextPik(client)", bridge)
+        # KWin 6 renamed the client-oriented API to window-oriented signals, so
+        # the self-activation guard follows the handler parameter name.
+        self.assertIn("!identifyTextPik(window)", bridge)
+        # The legacy Plasma 5 signals stay wired so one package serves both.
+        self.assertIn("workspace.clientActivated", bridge)
+        self.assertIn("workspace.clientAdded", bridge)
         self.assertIn('"/Scripting/Script${script_id}"', installer)
         self.assertIn("org.kde.kwin.Script.run", installer)
 

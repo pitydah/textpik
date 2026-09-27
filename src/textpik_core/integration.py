@@ -7,9 +7,20 @@ import locale
 import re
 import subprocess
 import urllib.request
+import ipaddress
 from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass
 from shutil import which
+
+
+# LanguageTool endpoint verdicts. These are surfaced verbatim in the settings
+# diagnostics, so they are part of the user-visible contract.
+GRAMMAR_ENDPOINT_LOCAL = "local"
+GRAMMAR_ENDPOINT_REMOTE_OPT_IN = "remote-opt-in"
+GRAMMAR_ENDPOINT_REMOTE_BLOCKED = "remote-blocked"
+GRAMMAR_ENDPOINT_INSECURE_REMOTE = "insecure-remote"
+GRAMMAR_ENDPOINT_INVALID = "invalid"
+GRAMMAR_ENDPOINT_UNREACHABLE = "unreachable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +40,7 @@ class RuntimeCapabilities:
     grammar_languages: tuple[str, ...] = ()
     spelling_language: str = ""
     grammar_ready: bool = False
+    grammar_endpoint_state: str = GRAMMAR_ENDPOINT_INVALID
     wasi_ready: bool = False
 
 
@@ -80,31 +92,122 @@ def _preferred_ollama_model(names: list[str], preferred: str = "") -> str:
     return names[0] if names else ""
 
 
+def _local_http_endpoint(endpoint: str) -> bool:
+    """Return True only for explicit HTTP(S) loopback endpoints.
+
+    This is the Ollama product invariant: the runtime is local by definition, so
+    the policy is a constant rather than a user preference. LanguageTool has a
+    different contract and deliberately does not reuse this function.
+    """
+    try:
+        parsed = urlsplit(str(endpoint or "").strip())
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    )
+
+
+def _host_is_loopback(hostname: str) -> bool:
+    host = str(hostname or "").strip().lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _host_is_private(hostname: str) -> bool:
+    """Return True for hosts that can be shown to stay on the local network.
+
+    Deliberately conservative, because this predicate is what downgrades the
+    HTTPS requirement: it admits an IP literal only when the address itself is
+    private, and a name only when the name is reserved for private use (RFC 6761
+    ``.localhost``, RFC 6762 mDNS ``.local``, ICANN-reserved ``.internal``).
+    Unreserved suffixes are treated as public, so plain HTTP is refused.
+    """
+    host = str(hostname or "").strip().lower()
+    if _host_is_loopback(host):
+        return True
+    if host.endswith(".local") or host.endswith(".internal"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_private or address.is_link_local
+
+
+def grammar_endpoint_verdict(
+    endpoint: str, *, allow_remote: bool = False
+) -> tuple[bool, str]:
+    """Decide whether a LanguageTool probe may contact ``endpoint``.
+
+    LanguageTool is not loopback-only the way Ollama is: a NAS, a VPS or a
+    deliberately chosen public service is a legitimate deployment. So the
+    policy is an explicit user opt-in, defaulting to fail-closed.
+
+    Returns ``(allowed, reason)``. The reason is a stable diagnostic string,
+    not a boolean, because "blocked" and "reached the server and it was down"
+    need very different words in the settings dialog.
+    """
+    try:
+        parsed = urlsplit(str(endpoint or "").strip())
+    except ValueError:
+        return False, GRAMMAR_ENDPOINT_INVALID
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return False, GRAMMAR_ENDPOINT_INVALID
+    if _host_is_loopback(parsed.hostname):
+        # Loopback stays allowed regardless of the opt-in: it is the default
+        # deployment and the traffic never leaves the machine.
+        return True, GRAMMAR_ENDPOINT_LOCAL
+    if not allow_remote:
+        return False, GRAMMAR_ENDPOINT_REMOTE_BLOCKED
+    # Opted in. Plain HTTP stays acceptable only for a private LAN host; a
+    # public host must be TLS so the text is not cleartext on the wire.
+    if parsed.scheme != "https" and not _host_is_private(parsed.hostname):
+        return False, GRAMMAR_ENDPOINT_INSECURE_REMOTE
+    return True, GRAMMAR_ENDPOINT_REMOTE_OPT_IN
+
+
 def probe_runtime_capabilities(
     *,
     preferred_ollama_model: str = "",
     ollama_endpoint: str = "http://127.0.0.1:11434/api/generate",
     grammar_endpoint: str = "http://127.0.0.1:8010/v2/languages",
+    grammar_allow_remote: bool = False,
     preferred_spelling_language: str = "auto",
 ) -> RuntimeCapabilities:
     """Probe optional providers once; every operation is local and bounded."""
     ollama_model = ""
     ollama_models: tuple[str, ...] = ()
     try:
+        if not _local_http_endpoint(ollama_endpoint):
+            raise ValueError("Ollama capability probes are loopback-only")
         parsed = urlsplit(ollama_endpoint)
         tags_endpoint = urlunsplit(
             (parsed.scheme, parsed.netloc, "/api/tags", "", "")
         )
         with urllib.request.urlopen(tags_endpoint, timeout=0.7) as response:
             body = json.loads(response.read(1_000_001))
+        # A local service can answer with an error object or a bare scalar.
+        # Validate the shape before reading it: body.get() on a list raises
+        # AttributeError, which this handler does not cover.
+        if not isinstance(body, dict):
+            raise ValueError("Ollama /api/tags returned a non-object payload")
+        raw_models = body.get("models", [])
+        if not isinstance(raw_models, list):
+            raise ValueError("Ollama /api/tags returned a non-list 'models'")
         names = [
             str(item.get("name", "")).strip()
-            for item in body.get("models", [])
+            for item in raw_models
             if isinstance(item, dict) and item.get("name")
         ]
         ollama_models = tuple(names)
         ollama_model = _preferred_ollama_model(names, preferred_ollama_model)
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, TypeError, ValueError, AttributeError, json.JSONDecodeError):
         pass
 
     ocr_languages: tuple[str, ...] = ()
@@ -151,23 +254,39 @@ def probe_runtime_capabilities(
 
     grammar_ready = False
     grammar_languages: tuple[str, ...] = ()
-    try:
-        grammar_probe_endpoint = (
-            grammar_endpoint.removesuffix("/check") + "/languages"
-            if grammar_endpoint.endswith("/check")
-            else grammar_endpoint
-        )
-        with urllib.request.urlopen(grammar_probe_endpoint, timeout=0.5) as response:
-            raw_languages = response.read(1_000_001)
-        body = json.loads(raw_languages)
-        grammar_languages = tuple(
-            str(item.get("longCode") or item.get("code") or "").strip()
-            for item in body[:200]
-            if isinstance(item, dict) and (item.get("longCode") or item.get("code"))
-        )
-        grammar_ready = True
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
+    # Computed before the try so the verdict survives whatever the probe throws:
+    # "blocked by policy" and "reached the server, it was down" must stay
+    # distinguishable in the settings diagnostics.
+    grammar_allowed, grammar_endpoint_state = grammar_endpoint_verdict(
+        grammar_endpoint, allow_remote=bool(grammar_allow_remote)
+    )
+    # A blocked endpoint opens no socket at all. The probe carries no user text,
+    # but the URL itself can name a remote host, so skipping the request is what
+    # makes "no request leaves the machine" literally true.
+    if grammar_allowed:
+        try:
+            grammar_probe_endpoint = (
+                grammar_endpoint.removesuffix("/check") + "/languages"
+                if grammar_endpoint.endswith("/check")
+                else grammar_endpoint
+            )
+            with urllib.request.urlopen(grammar_probe_endpoint, timeout=0.5) as response:
+                raw_languages = response.read(1_000_001)
+            body = json.loads(raw_languages)
+            # A proxy error page decodes to an object; body[:200] on a dict would
+            # otherwise raise TypeError. Reject the shape explicitly so the failure
+            # is a clear "unavailable" rather than a silent misparse.
+            if not isinstance(body, list):
+                raise ValueError("LanguageTool probe returned a non-list payload")
+            grammar_languages = tuple(
+                str(item.get("longCode") or item.get("code") or "").strip()
+                for item in body[:200]
+                if isinstance(item, dict)
+                and (item.get("longCode") or item.get("code"))
+            )
+            grammar_ready = True
+        except (OSError, TypeError, ValueError, AttributeError, json.JSONDecodeError):
+            grammar_endpoint_state = GRAMMAR_ENDPOINT_UNREACHABLE
 
     return RuntimeCapabilities(
         ollama_model=ollama_model,
@@ -176,6 +295,7 @@ def probe_runtime_capabilities(
         grammar_languages=grammar_languages,
         spelling_language=spelling_language,
         grammar_ready=grammar_ready,
+        grammar_endpoint_state=grammar_endpoint_state,
         wasi_ready=bool(which("wasmtime")),
     )
 

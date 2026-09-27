@@ -78,7 +78,13 @@ class AtspiSelectionBackend:
         if not self.available or depth > 8:
             return None
         if node is None and self._focused_node is not None:
-            return self._focused_node
+            try:
+                states = self._focused_node.get_state_set()
+                if states.contains(self.atspi.StateType.FOCUSED):
+                    return self._focused_node
+            except Exception:
+                pass
+            self._focused_node = None
         if budget is None:
             budget = [400]
         if budget[0] <= 0:
@@ -116,11 +122,22 @@ class AtspiSelectionBackend:
             rect = text_iface.get_range_extents(start, end, coord)
             # Never request contents from a password/secret accessible object.
             text = "" if sensitive else text_iface.get_text(start, end)
-            anchor = PopupAnchor(
-                int(rect.x + rect.width),
-                int(rect.y + rect.height),
-                AnchorSource.ATSPI_SELECTION,
-                1.0,
+            rect_values = (
+                int(rect.x),
+                int(rect.y),
+                int(rect.width),
+                int(rect.height),
+            )
+            geometry_valid = rect_values[2] > 0 and rect_values[3] > 0
+            anchor = (
+                PopupAnchor(
+                    rect_values[0] + rect_values[2],
+                    rect_values[1] + rect_values[3],
+                    AnchorSource.ATSPI_SELECTION,
+                    1.0,
+                )
+                if geometry_valid
+                else None
             )
             return SelectionContext(
                 text=text,
@@ -132,7 +149,7 @@ class AtspiSelectionBackend:
                 selection_start=start,
                 selection_end=end,
                 backend="atspi",
-                selection_rect=(int(rect.x), int(rect.y), int(rect.width), int(rect.height)),
+                selection_rect=rect_values if geometry_valid else None,
                 native_handle=node,
             )
         except Exception:

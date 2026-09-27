@@ -216,7 +216,11 @@ class SelectionStateTest(unittest.TestCase):
         monitor.text = "too long"
         cleared = []
         monitor.selection_cleared.connect(lambda: cleared.append(True))
-        monitor._debounce_expired()
+        # _debounce_expired() is the guarded read entry point. This test targets
+        # the oversized-selection branch, so state its precondition (guard open)
+        # directly rather than depending on wall-clock quiet-period timing.
+        with patch.object(monitor, "selection_input_ready", return_value=True):
+            monitor._debounce_expired()
         self.assertEqual(monitor.get_last_text(), "")
         self.assertEqual(cleared, [True])
 

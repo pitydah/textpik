@@ -17,19 +17,15 @@ function sendCursorPos() {
     );
 }
 
-function onClientActivated(client) {
-    // Cuando el usuario activa otra ventana (clic fuera del popup),
-    // notificamos a TextPik para que cierre el popup.
-    // El popup de TextPik es override-redirect, no aparece como client.
-    // A null activation is how Plasma can represent a desktop/background
-    // click. It is external too; the app ignores the signal when no popup is
-    // visible.
-    if (!client || !identifyTextPik(client)) {
+function onWindowActivated(window) {
+    // This signal proves a KWin activation change, not a raw global mouse
+    // click. TextPik keeps those two capabilities separate.
+    if (!window || !identifyTextPik(window)) {
         callDBus(
             service,
             path,
             iface,
-            "notifyClickOutside"
+            "notifyWindowActivated"
         );
     }
 }
@@ -59,9 +55,9 @@ if (workspace.cursorPosChanged) {
     workspace.cursorPosChanged.connect(sendCursorPos);
 }
 if (workspace.windowActivated) {
-    workspace.windowActivated.connect(onClientActivated);
+    workspace.windowActivated.connect(onWindowActivated);
 } else if (workspace.clientActivated) {
-    workspace.clientActivated.connect(onClientActivated);
+    workspace.clientActivated.connect(onWindowActivated);
 }
 if (workspace.windowAdded) {
     workspace.windowAdded.connect(keepTextPikOutOfTaskManager);
@@ -78,4 +74,4 @@ sendCursorPos();
 if (typeof setInterval === "function") {
     setInterval(sendCursorPos, 1000);
 }
-print("TextPik cursor bridge loaded");
+print("TextPik cursor/activation bridge loaded");

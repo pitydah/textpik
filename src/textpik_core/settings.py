@@ -82,6 +82,10 @@ DEFAULT_SETTINGS = {
     "ollama_endpoint": "http://127.0.0.1:11434/api/generate",
     "ollama_model": "",
     "languagetool_endpoint": "http://127.0.0.1:8010/v2/check",
+    # Fail-closed opt-in for a non-loopback LanguageTool server. Never inferred
+    # from a pre-existing remote endpoint: upgrading must not silently start
+    # shipping the user's text off-box, so only an explicit setting can open it.
+    "grammar_allow_remote": False,
     "grammar_language": "auto",
     "ocr_languages": "auto",
     "media_player": "auto",
@@ -248,6 +252,7 @@ def normalize_settings(
         "disable_in_sensitive_fields",
         "ignore_file_selections",
         "start_at_login",
+        "grammar_allow_remote",
     ):
         normalized[key] = normalize_bool(normalized[key], DEFAULT_SETTINGS[key])
 

@@ -30,6 +30,8 @@ jobs:
           sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
       - run: python -m pip install -e . ruff coverage build twine
       - run: python -m unittest discover -s tests -v
+      - name: V14 RC boundary truth regressions
+        run: python -m unittest tests.test_popup_v14_rc -v
       - run: python scripts/check_performance.py
         env:
           QT_QPA_PLATFORM: offscreen

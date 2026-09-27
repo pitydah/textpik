@@ -1,7 +1,7 @@
 {
   "KPlugin": {
-    "Name": "TextPik Cursor Bridge",
-    "Description": "Sends KWin cursor position to textpik on KDE Wayland.",
+    "Name": "TextPik Cursor and Activation Bridge",
+    "Description": "Reports KWin cursor position and activation changes to TextPik on KDE Wayland.",
     "Icon": "edit-select-all",
     "Authors": [
       {
@@ -9,7 +9,7 @@
       }
     ],
     "Id": "textpik-cursor-bridge",
-    "Version": "1.1",
+    "Version": "1.2",
     "License": "MIT"
   },
   "X-Plasma-API": "javascript",
