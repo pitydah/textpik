@@ -444,11 +444,38 @@ class AtspiV14Test(unittest.TestCase):
             _pending_atspi_node=None,
         )
         self.assertEqual(monitor._last_selection_activity_at, 0.0)
+        # The platform predicate must stay pinned across the whole assertion.
+        # An earlier version patched it only around the call, so the guard read
+        # the real session type afterwards: it passed on a Wayland desktop and
+        # failed on CI, where a non-Wayland session reaches the authoritative
+        # pointer branch and legitimately answers "ready".
         with patch("src.textpik.is_wayland", return_value=True):
             TextPikApp._queue_atspi_selection(app, None)
-        self.assertGreater(monitor._last_selection_activity_at, 0.0)
-        # Activity just recorded, so the quiet period has not elapsed.
-        self.assertFalse(monitor.selection_input_ready())
+            self.assertGreater(monitor._last_selection_activity_at, 0.0)
+            # Activity just recorded, so the quiet period has not elapsed.
+            self.assertFalse(monitor.selection_input_ready())
+
+    def test_quiet_period_is_wayland_only_and_never_bypasses_pointer_state(self):
+        # The quiet-period guard exists because the pointer state is UNKNOWN on
+        # Wayland. Off Wayland that state is authoritative, so "no button down"
+        # already means the selection is finished and the guard must not hold
+        # the popup back. This pins the branch order in both directions, so the
+        # invariant cannot be "fixed" by reordering.
+        monitor = BaseSelectionMonitor()
+        with patch("src.textpik.is_wayland", return_value=True):
+            self.assertFalse(
+                monitor.selection_input_ready(),
+                "no recorded activity must fail closed on Wayland",
+            )
+        with patch("src.textpik.is_wayland", return_value=False), patch.object(
+            QApplication, "mouseButtons", return_value=Qt.NoButton
+        ):
+            self.assertIs(monitor._primary_button_state(), False)
+            self.assertTrue(
+                monitor.selection_input_ready(),
+                "an authoritative 'no button down' must not wait for a quiet "
+                "period that only makes sense when the pointer state is unknown",
+            )
 
 
 if __name__ == "__main__":
