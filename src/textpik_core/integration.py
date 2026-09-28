@@ -125,13 +125,29 @@ def _host_is_private(hostname: str) -> bool:
     Deliberately conservative, because this predicate is what downgrades the
     HTTPS requirement: it admits an IP literal only when the address itself is
     private, and a name only when the name is reserved for private use (RFC 6761
-    ``.localhost``, RFC 6762 mDNS ``.local``, ICANN-reserved ``.internal``).
-    Unreserved suffixes are treated as public, so plain HTTP is refused.
+    ``.localhost``, RFC 6762 mDNS ``.local``, ICANN-reserved ``.internal``, and
+    ``.home.arpa`` from RFC 8375, the standardised home-network domain). Every
+    other suffix is treated as public, so plain HTTP is refused.
+
+    Two things this must not grow into:
+
+    - No DNS resolution. A lookup here would add latency to a probe that runs on
+      the settings path, and it would be unsound anyway: the answer could change
+      between the check and the request, which is the classic DNS rebinding /
+      TOCTOU hole. Suffix matching is decided on the user's literal input.
+    - No de facto conventions. ``.lan`` is widely used in home setups but is not
+      reserved by anyone, so it cannot be treated as a guarantee of private
+      scope. Someone serving LanguageTool on ``grammar.lan`` should use
+      ``https://grammar.lan/...`` or the private IP directly.
     """
     host = str(hostname or "").strip().lower()
     if _host_is_loopback(host):
         return True
-    if host.endswith(".local") or host.endswith(".internal"):
+    if (
+        host.endswith(".local")
+        or host.endswith(".internal")
+        or host.endswith(".home.arpa")
+    ):
         return True
     try:
         address = ipaddress.ip_address(host)

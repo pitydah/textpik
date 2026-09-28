@@ -18,6 +18,7 @@ from src.textpik_core.integration import (
     GRAMMAR_ENDPOINT_REMOTE_BLOCKED,
     GRAMMAR_ENDPOINT_REMOTE_OPT_IN,
     GRAMMAR_ENDPOINT_UNREACHABLE,
+    _host_is_private,
     _local_http_endpoint,
     grammar_endpoint_verdict,
     probe_runtime_capabilities,
@@ -172,11 +173,17 @@ class GrammarEndpointPolicyTest(unittest.TestCase):
 
     def test_private_lan_may_use_plain_http_when_opted_in(self):
         # A self-hosted LanguageTool on the LAN is the common remote case and
-        # TLS is frequently not set up there.
+        # TLS is frequently not set up there. Every entry is either a private IP
+        # literal or a suffix reserved for private use.
         for endpoint in (
             "http://192.168.1.50:8012/v2/languages",
             "http://10.0.0.7:8012/v2/languages",
+            "http://172.16.4.2:8012/v2/languages",
+            "http://169.254.10.4:8012/v2/languages",
+            "http://[fc00::1]:8012/v2/languages",
             "http://grammar.local:8012/v2/languages",
+            "http://grammar.internal:8012/v2/languages",
+            "http://grammar.home.arpa:8012/v2/languages",
         ):
             with self.subTest(endpoint=endpoint):
                 caps, contacted = self._probe(endpoint, allow_remote=True)
@@ -186,15 +193,90 @@ class GrammarEndpointPolicyTest(unittest.TestCase):
                 )
                 self.assertEqual(len(contacted), 1)
 
+    def test_home_arpa_is_the_standardised_home_network_domain(self):
+        # RFC 8375 reserves .home.arpa for home networks, so it belongs beside
+        # .local and .internal rather than with the de facto conventions.
+        self.assertEqual(
+            grammar_endpoint_verdict(
+                "http://grammar.home.arpa:8012/v2/check", allow_remote=True
+            ),
+            (True, GRAMMAR_ENDPOINT_REMOTE_OPT_IN),
+        )
+
+    def test_lan_suffix_is_never_private_but_may_still_serve_over_https(self):
+        # .lan is a convention, not a reservation, so it does not earn the HTTP
+        # downgrade. It is not blocked outright: opting in over TLS is fine, and
+        # so is the same host reached by private IP.
+        over_http, contacted_http = self._probe(
+            "http://grammar.lan:8012/v2/languages", allow_remote=True
+        )
+        self.assertEqual(contacted_http, [], f"cleartext was sent: {contacted_http}")
+        self.assertEqual(
+            over_http.grammar_endpoint_state, GRAMMAR_ENDPOINT_INSECURE_REMOTE
+        )
+        over_https, contacted_https = self._probe(
+            "https://grammar.lan:8012/v2/languages", allow_remote=True
+        )
+        self.assertTrue(over_https.grammar_ready)
+        self.assertEqual(
+            over_https.grammar_endpoint_state, GRAMMAR_ENDPOINT_REMOTE_OPT_IN
+        )
+        self.assertEqual(len(contacted_https), 1)
+        by_ip, contacted_ip = self._probe(
+            "http://192.168.1.50:8012/v2/languages", allow_remote=True
+        )
+        self.assertTrue(by_ip.grammar_ready)
+        self.assertEqual(len(contacted_ip), 1)
+
     def test_unreserved_name_over_plain_http_is_treated_as_public(self):
         # The HTTPS downgrade is only for hosts provably on the LAN. A made-up
         # private-looking suffix must not become a way to ship cleartext text.
-        caps, contacted = self._probe(
-            "http://grammar.lan:8012/v2/languages", allow_remote=True
-        )
-        self.assertEqual(contacted, [], f"cleartext was sent: {contacted}")
+        for endpoint in (
+            "http://grammar.lan:8012/v2/languages",
+            "http://grammar.example:8012/v2/languages",
+        ):
+            with self.subTest(endpoint=endpoint):
+                caps, contacted = self._probe(endpoint, allow_remote=True)
+                self.assertEqual(contacted, [])
+                self.assertEqual(
+                    caps.grammar_endpoint_state, GRAMMAR_ENDPOINT_INSECURE_REMOTE
+                )
+
+    def test_private_scope_is_decided_without_resolving_dns(self):
+        # Suffix matching on the literal input only. A lookup would be a TOCTOU
+        # / DNS-rebinding hole and would add latency to a settings-path probe, so
+        # the decision must stay a pure function of the string.
+        source = code_only(grammar_endpoint_verdict)
+        for forbidden in ("getaddrinfo", "resolve", "socket.gethostby", "dns"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_host_is_private_is_self_contained(self):
+        # _host_is_private is asked to answer on its own here. In the probe it is
+        # only reached for hosts that already failed the loopback check, so this
+        # pins the contract of the helper instead of leaving its loopback branch
+        # as untested dead code.
+        for host, expected in (
+            ("127.0.0.1", True),
+            ("localhost", True),
+            ("grammar.home.arpa", True),
+            ("grammar.internal", True),
+            ("grammar.local", True),
+            ("grammar.lan", False),
+            ("grammar.example", False),
+        ):
+            with self.subTest(host=host):
+                self.assertIs(_host_is_private(host), expected)
+
+    def test_malformed_ipv6_endpoint_is_reported_as_invalid(self):
+        # urlsplit raises rather than returning a hostname for an unclosed
+        # bracket. The verdict must still come back as a clean "invalid" and
+        # must not open a socket.
+        caps, contacted = self._probe("http://[::1:8012/v2/languages", allow_remote=True)
+        self.assertEqual(contacted, [])
+        self.assertFalse(caps.grammar_ready)
         self.assertEqual(
-            caps.grammar_endpoint_state, GRAMMAR_ENDPOINT_INSECURE_REMOTE
+            caps.grammar_endpoint_state, GRAMMAR_ENDPOINT_INVALID
         )
 
     def test_private_lan_is_still_blocked_without_the_opt_in(self):
