@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from enum import Enum
 
+from .platform import desktop_family
+
 
 class CapabilityTruth(str, Enum):
     VERIFIED = "verified"
@@ -43,16 +45,8 @@ class WaylandCapabilityProfile:
 
 
 def _desktop_family(desktop: str) -> str:
-    value = str(desktop or "").casefold()
-    if "plasma" in value or "kde" in value:
-        return "plasma"
-    if "gnome" in value:
-        return "gnome"
-    if "hyprland" in value:
-        return "hyprland"
-    if "sway" in value:
-        return "sway"
-    return value or "unknown"
+    """Kept for backwards compatibility: see :mod:`textpik_core.platform`."""
+    return desktop_family(desktop)
 
 
 def build_wayland_profile(
