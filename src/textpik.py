@@ -45,7 +45,16 @@ try:
     )
     from textpik_core.atspi import AtspiSelectionBackend
     from textpik_core.extensions import inspect_local_extensions
-    from textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
+    from textpik_core.models import (
+        AnchorSource,
+        PlacementBackend,
+        Point,
+        PopupAnchor,
+        PopupPlacementResult,
+        SelectionContext,
+    )
+    from textpik_core.placement import PresentationLease, select_placement_backend
+    from textpik_core.placement_client import KWinPlacementClient
     from textpik_core.integration import (
         GRAMMAR_ENDPOINT_INVALID,
         GRAMMAR_ENDPOINT_REMOTE_BLOCKED,
@@ -145,7 +154,16 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     )
     from .textpik_core.atspi import AtspiSelectionBackend
     from .textpik_core.extensions import inspect_local_extensions
-    from .textpik_core.models import AnchorSource, PopupAnchor, SelectionContext
+    from .textpik_core.models import (
+        AnchorSource,
+        PlacementBackend,
+        Point,
+        PopupAnchor,
+        PopupPlacementResult,
+        SelectionContext,
+    )
+    from .textpik_core.placement import PresentationLease, select_placement_backend
+    from .textpik_core.placement_client import KWinPlacementClient
     from .textpik_core.integration import (
         GRAMMAR_ENDPOINT_INVALID,
         GRAMMAR_ENDPOINT_REMOTE_BLOCKED,
@@ -373,6 +391,16 @@ from PySide6.QtWidgets import (  # noqa: E402
 
 APP_NAME = "textpik"
 APP_VERSION = "0.5.0-rc.1"
+
+# The placement authority can appear or disappear mid-session (the KWin effect
+# is loaded by the compositor, not by TextPik), so the answer is re-probed at
+# this interval instead of being decided once at startup.
+PLACEMENT_PROBE_TTL = 2.0
+# A freshly shown Wayland surface reaches the compositor a moment after show(),
+# so an unconfirmed placement is retried a few times before giving up.
+PLACEMENT_CONFIRM_ATTEMPTS = 4
+PLACEMENT_CONFIRM_INTERVAL_MS = 25
+
 GITHUB_PROFILE_URL = "https://github.com/pitydah"
 GITHUB_SPONSORS_URL = "https://github.com/sponsors/pitydah"
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -2258,6 +2286,14 @@ class PopupWindow(QWidget):
         self._last_position_at = 0.0
         self._last_pointer_sample = None
         self.pointer_anchor_reliable = False
+        # Placement authority: the popup position is only claimed as verified
+        # when the compositor confirmed it (see PopupPlacementResult).
+        self._placement_client = None
+        self._placement_choice = None
+        self._placement_probed_at = 0.0
+        self._placement_lease = PresentationLease()
+        self._placement_attempt = 0
+        self.last_placement_result = None
         self.keyboard_mode = False
         self.palette = ActionPalette(self)
         self.palette.action_triggered.connect(self._on_click)
@@ -2638,6 +2674,9 @@ class PopupWindow(QWidget):
         self.action_triggered.emit(cmd, text)
 
     def hideEvent(self, event):
+        # A hidden popup has no current request, so any confirmation still in
+        # flight must be dropped instead of mutating the placement state.
+        self._placement_lease.release()
         self.dismissed.emit()
         super().hideEvent(event)
 
@@ -2719,6 +2758,9 @@ class PopupWindow(QWidget):
         self.adjustSize()
         size = self.sizeHint().expandedTo(self.minimumSize())
         self.resize(size)
+        desired_point = None
+        requested_point = None
+        width = height = 0
         if screen:
             geo = screen.availableGeometry()
             width = size.width()
@@ -2749,6 +2791,10 @@ class PopupWindow(QWidget):
                 y = geo.top() + self.settings.get("popup_wayland_fallback_top", 112)
                 logger.info("Usando posicion fallback para popup: x=%s y=%s", x, y)
 
+            # Recorded before the workarea clamp: this is the position the
+            # anchor logic wanted, and it stays separate from what is possible.
+            desired_point = Point(int(x), int(y))
+
             if x + width > geo.right() + 1:
                 x = geo.right() - width + 1
                 if (
@@ -2776,9 +2822,14 @@ class PopupWindow(QWidget):
             )
             self._last_stable_position = (x, y)
             self._last_position_at = time.monotonic()
+            requested_point = Point(int(x), int(y))
+            # On X11 this is the actual placement request; on Wayland it is a
+            # no-op that the compositor ignores, which is why the position is
+            # never reported as verified from the toolkit side.
             self.move(x, y)
             logger.info(
-                "Popup: cursor=(%s,%s reliable=%s) screen=%s,%s %sx%s pos=(%s,%s) size=%sx%s",
+                "Popup: cursor=(%s,%s reliable=%s) screen=%s,%s %sx%s"
+                " desired=(%s,%s) requested=(%s,%s) size=%sx%s",
                 cx,
                 cy,
                 cursor_reliable,
@@ -2786,8 +2837,10 @@ class PopupWindow(QWidget):
                 geo.y(),
                 geo.width(),
                 geo.height(),
-                x,
-                y,
+                desired_point.x,
+                desired_point.y,
+                requested_point.x,
+                requested_point.y,
                 width,
                 height,
             )
@@ -2796,7 +2849,151 @@ class PopupWindow(QWidget):
 
         self.show()
         self.raise_()
-        logger.info("Popup visible=%s geometry=%s", self.isVisible(), self.geometry())
+        logger.info("Popup visible=%s size=%sx%s", self.isVisible(), width, height)
+
+        if requested_point is not None:
+            self._report_placement(desired_point, requested_point, width, height)
+
+    def _placement_backend_choice(self):
+        """Resolve, with a short cache, who is allowed to place the popup."""
+        now = time.monotonic()
+        if (
+            self._placement_choice is not None
+            and now - self._placement_probed_at <= PLACEMENT_PROBE_TTL
+        ):
+            return self._placement_choice
+
+        platform_name = QApplication.platformName()
+        desktop = detect_desktop_environment()
+        effect_available = None
+        if "wayland" in platform_name.casefold() and is_kde_desktop(desktop):
+            if self._placement_client is None:
+                self._placement_client = KWinPlacementClient()
+            effect_available = self._placement_client.available()
+        self._placement_choice = select_placement_backend(
+            platform_name=platform_name,
+            desktop=desktop,
+            effect_available=effect_available,
+        )
+        self._placement_probed_at = now
+        return self._placement_choice
+
+    def _report_placement(self, desired, requested, width, height):
+        """Record where the popup was asked to go and who may confirm it.
+
+        On Wayland the toolkit cannot place a toplevel, so the local position is
+        a request and nothing more.  The popup is only reported as verified when
+        the compositor-side authority confirms the same revision and geometry.
+        """
+        choice = self._placement_backend_choice()
+
+        if choice.backend is PlacementBackend.KWIN_EFFECT:
+            self._start_kwin_placement(desired, requested, width, height)
+            return
+
+        observed = None
+        observed_size = None
+        if choice.backend is PlacementBackend.X11:
+            # X11 has a real window manager and Qt tracks the server-side frame
+            # position there, so the post-map position is evidence.
+            observed = Point(int(self.x()), int(self.y()))
+            observed_size = (width, height)
+        result = PopupPlacementResult(
+            backend=choice.backend,
+            desired=desired,
+            requested=requested,
+            observed=observed,
+            requested_size=(width, height),
+            observed_size=observed_size,
+        )
+        self.last_placement_result = result
+        logger.info(
+            "Popup placement backend=%s outcome=%s verified=%s requested=%s observed=%s",
+            result.backend.value,
+            result.outcome.value,
+            result.verified,
+            requested.as_tuple(),
+            observed.as_tuple() if observed else None,
+        )
+
+    def _start_kwin_placement(self, desired, requested, width, height):
+        revision = self._placement_lease.begin()
+        client = self._placement_client
+        sent = bool(
+            client
+            and client.request(
+                revision, requested.x, requested.y, width, height
+            )
+        )
+        if not sent:
+            self._store_placement_result(
+                desired, requested, width, height, revision, None, "effect-unreachable"
+            )
+            logger.warning(
+                "Popup placement: el efecto KWin no acepto la solicitud (revision=%s)",
+                revision,
+            )
+            return
+        self._placement_attempt = 0
+        self._await_placement_confirmation(revision, desired, requested, width, height)
+
+    def _await_placement_confirmation(self, revision, desired, requested, width, height):
+        """Read the compositor geometry, retrying while the popup is mapping.
+
+        A surface that was just shown may reach KWin one event-loop turn later,
+        so an unconfirmed revision is retried a bounded number of times instead
+        of reporting a failure the compositor never had a chance to answer.
+        """
+        client = self._placement_client
+        confirmation = client.readback(revision) if client else None
+        if confirmation is None and self._placement_attempt < PLACEMENT_CONFIRM_ATTEMPTS - 1:
+            self._placement_attempt += 1
+            QTimer.singleShot(
+                PLACEMENT_CONFIRM_INTERVAL_MS,
+                lambda: self._retry_placement_confirmation(
+                    revision, desired, requested, width, height
+                ),
+            )
+            return
+        self._store_placement_result(
+            desired, requested, width, height, revision, confirmation, None
+        )
+
+    def _retry_placement_confirmation(self, revision, desired, requested, width, height):
+        if not self.isVisible() or self._placement_lease.active_revision != revision:
+            return
+        self._await_placement_confirmation(revision, desired, requested, width, height)
+
+    def _store_placement_result(
+        self, desired, requested, width, height, revision, confirmation, error
+    ):
+        accepted = bool(confirmation) and self._placement_lease.accept(revision)
+        result = PopupPlacementResult(
+            backend=PlacementBackend.KWIN_EFFECT,
+            desired=desired,
+            requested=requested,
+            observed=confirmation.position if accepted else None,
+            requested_size=(width, height),
+            observed_size=confirmation.size if accepted else None,
+            output=confirmation.output if confirmation else "",
+            revision=revision,
+            active_revision=self._placement_lease.active_revision,
+            error=error,
+        )
+        self.last_placement_result = result
+        logger.info(
+            "Popup placement backend=%s outcome=%s verified=%s revision=%s"
+            " active=%s requested=%s observed=%s output=%s error=%s",
+            result.backend.value,
+            result.outcome.value,
+            result.verified,
+            result.revision,
+            result.active_revision,
+            requested.as_tuple(),
+            result.observed.as_tuple() if result.observed else None,
+            result.output or "-",
+            result.error or "-",
+        )
 
 
 def validate_actions(actions):

@@ -1,5 +1,7 @@
 import json
 import inspect
+import subprocess
+import sys
 import tempfile
 import unittest
 import weakref
@@ -398,9 +400,34 @@ class PerformanceContractTest(unittest.TestCase):
             __import__("src.textpik_core.execution", fromlist=["*"]),
             __import__("src.textpik_core.settings", fromlist=["*"]),
             __import__("src.textpik_core.storage", fromlist=["*"]),
+            # Placement authority stays Qt-free at import time.
+            __import__("src.textpik_core.models", fromlist=["*"]),
+            __import__("src.textpik_core.placement", fromlist=["*"]),
         )
         for module in modules:
             self.assertNotIn("PySide6", inspect.getsource(module))
+
+    def test_placement_client_imports_qt_lazily(self):
+        """The compositor client may name QtDBus, but must not import it eagerly.
+
+        The placement client needs QtDBus on first call, which would put Qt on
+        the popup hot path if it happened at import time. A subprocess is used
+        because the test session already has PySide6 loaded.
+        """
+        root = Path(__file__).resolve().parents[1]
+        code = (
+            "import sys;"
+            "import src.textpik_core.placement_client as client;"
+            "assert 'PySide6' not in sys.modules, 'Qt was imported eagerly';"
+            "assert client.KWinPlacementClient is not None;"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PlatformContractTest(unittest.TestCase):
