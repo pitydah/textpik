@@ -2887,13 +2887,13 @@ class PopupWindow(QWidget):
         """
         choice = self._placement_backend_choice()
 
-        if choice.backend is PlacementBackend.KWIN_EFFECT:
+        if choice.backend == PlacementBackend.KWIN_EFFECT:
             self._start_kwin_placement(desired, requested, width, height)
             return
 
         observed = None
         observed_size = None
-        if choice.backend is PlacementBackend.X11:
+        if choice.backend == PlacementBackend.X11:
             # X11 has a real window manager and Qt tracks the server-side frame
             # position there, so the post-map position is evidence.
             observed = Point(int(self.x()), int(self.y()))

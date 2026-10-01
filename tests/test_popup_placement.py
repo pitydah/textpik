@@ -6,6 +6,7 @@ a confirmation that no longer belongs to the current request must be dropped.
 """
 
 import os
+import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -52,7 +53,9 @@ class PopupPlacementTest(unittest.TestCase):
         popup._placement_choice = PlacementBackendChoice(
             backend, authoritative, reason="test-forced"
         )
-        popup._placement_probed_at = 10**9  # never re-probe during the test
+        # Relative future stamp: the cache check subtracts ``now``, so an
+        # absolute constant would depend on the monotonic clock's base.
+        popup._placement_probed_at = time.monotonic() + 3600.0
 
     # -- backend selection -------------------------------------------------
 
@@ -111,7 +114,7 @@ class PopupPlacementTest(unittest.TestCase):
 
         result = popup.last_placement_result
         self.assertIsNotNone(result)
-        self.assertEqual(result.observed, Point(120, 90))
+        self.assertEqual(result.observed.as_tuple(), (120, 90))
         popup.hide()
 
     # -- compositor authority ---------------------------------------------
@@ -133,7 +136,7 @@ class PopupPlacementTest(unittest.TestCase):
 
         result = popup.last_placement_result
         self.assertTrue(result.verified)
-        self.assertEqual(result.observed, Point(700, 460))
+        self.assertEqual(result.observed.as_tuple(), (700, 460))
         self.assertEqual(result.output, "DP-2")
         popup.hide()
 
@@ -189,6 +192,37 @@ class PopupPlacementTest(unittest.TestCase):
         revision = popup._placement_lease.begin()
         popup.hide()
         self.assertFalse(popup._placement_lease.accept(revision))
+
+    def test_backend_from_another_module_instance_is_still_understood(self):
+        """Placement must compare backend values, not enum object identity.
+
+        CI installs the project editable, so ``textpik_core`` and
+        ``src.textpik_core`` become two module objects holding two enum classes
+        for the same values. An identity comparison would silently fall back to
+        the unverified path and this test would fail.
+        """
+        from src.textpik_core.models import PlacementBackend as other_module
+
+        popup = self.make_popup()
+        popup._placement_client = KWinPlacementClient(
+            FakeTransport(
+                {
+                    "requestPlacement": (True, []),
+                    "readback": (True, ["1,1,700,460,240,33,DP-2"]),
+                }
+            )
+        )
+        popup._placement_choice = PlacementBackendChoice(
+            other_module.KWIN_EFFECT, True, reason="other-module"
+        )
+        popup._placement_probed_at = time.monotonic() + 3600.0
+        popup.show()
+        popup._report_placement(Point(700, 460), Point(700, 460), 240, 33)
+
+        result = popup.last_placement_result
+        self.assertTrue(result.verified, f"backend no reconocido: {result.error}")
+        self.assertEqual(result.observed.as_tuple(), (700, 460))
+        popup.hide()
 
     def test_late_confirmation_for_a_newer_selection_is_dropped(self):
         popup = self.make_popup()

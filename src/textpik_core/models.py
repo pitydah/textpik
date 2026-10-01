@@ -51,8 +51,14 @@ class PlacementBackend(str, Enum):
 
     @property
     def authoritative(self) -> bool:
-        """Whether this backend can observe the real compositor geometry."""
-        return self in {PlacementBackend.KWIN_EFFECT, PlacementBackend.X11}
+        """Whether this backend can observe the real compositor geometry.
+
+        Compared by value rather than by member identity: the project can be
+        imported both as ``textpik_core`` and as ``src.textpik_core`` (the CI
+        editable install does both), and the two module objects then hold
+        distinct enum classes for the same value.
+        """
+        return self.value in ("kwin-effect", "x11")
 
 
 class PlacementOutcome(str, Enum):
@@ -122,7 +128,7 @@ class PopupPlacementResult:
         )
 
     def _derive_error(self) -> str | None:
-        if self.backend is PlacementBackend.UNAVAILABLE:
+        if self.backend.value == PlacementBackend.UNAVAILABLE.value:
             return "placement-backend-unavailable"
         if not self.backend.authoritative:
             return None
@@ -168,7 +174,7 @@ class PopupPlacementResult:
     def outcome(self) -> PlacementOutcome:
         if self.verified:
             return PlacementOutcome.VERIFIED
-        if self.backend is PlacementBackend.UNAVAILABLE:
+        if self.backend.value == PlacementBackend.UNAVAILABLE.value:
             return PlacementOutcome.BACKEND_UNAVAILABLE
         if not self.backend.authoritative:
             return PlacementOutcome.UNVERIFIED

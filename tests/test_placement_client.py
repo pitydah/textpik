@@ -7,6 +7,8 @@ failure has to degrade to "not verified" instead of raising into the selection
 hot path.
 """
 
+import unittest
+
 from src.textpik_core.models import Point
 from src.textpik_core.placement_client import (
     INTERFACE_NAME,
@@ -39,102 +41,117 @@ class FakeTransport:
         return [name for name, _ in self.calls]
 
 
-class TestContract:
+class ContractTest(unittest.TestCase):
     def test_service_contract_matches_the_effect(self):
-        assert SERVICE_NAME == "org.textpik.KWinPlacement"
-        assert INTERFACE_NAME == "org.textpik.KWinPlacement"
-        assert OBJECT_PATH == "/KWinPlacement"
+        self.assertEqual(SERVICE_NAME, "org.textpik.KWinPlacement")
+        self.assertEqual(INTERFACE_NAME, "org.textpik.KWinPlacement")
+        self.assertEqual(OBJECT_PATH, "/KWinPlacement")
 
 
-class TestAvailability:
+class AvailabilityTest(unittest.TestCase):
     def test_available_when_readback_answers(self):
-        client = KWinPlacementClient(FakeTransport({"readback": (True, ["7,0,0,0,0,0,"])}))
-        assert client.available() is True
+        client = KWinPlacementClient(
+            FakeTransport({"readback": (True, ["7,0,0,0,0,0,"])})
+        )
+        self.assertTrue(client.available())
 
     def test_unavailable_when_transport_fails(self):
         transport = FakeTransport({"readback": RuntimeError("no such service")})
         client = KWinPlacementClient(transport)
-        assert client.available() is False
-        assert client.last_error
+        self.assertFalse(client.available())
+        self.assertTrue(client.last_error)
 
     def test_available_probes_without_arguments(self):
         transport = FakeTransport({"readback": (True, ["0,0,0,0,0,0,"])})
         KWinPlacementClient(transport).available()
-        assert transport.calls == [("readback", ())]
+        self.assertEqual(transport.calls, [("readback", ())])
 
 
-class TestRequests:
+class RequestsTest(unittest.TestCase):
     def test_request_sends_ints_in_protocol_order(self):
         transport = FakeTransport({"requestPlacement": (True, [])})
         client = KWinPlacementClient(transport)
-        assert client.request(41, 1440, 720, 320, 90) is True
-        assert transport.calls == [
-            ("requestPlacement", (41, 1440, 720, 320, 90)),
-        ]
+        self.assertTrue(client.request(41, 1440, 720, 320, 90))
+        self.assertEqual(
+            transport.calls, [("requestPlacement", (41, 1440, 720, 320, 90))]
+        )
 
     def test_request_reports_transport_failure(self):
         transport = FakeTransport({"requestPlacement": RuntimeError("stalled")})
-        assert KWinPlacementClient(transport).request(1, 0, 0, 10, 10) is False
+        self.assertFalse(KWinPlacementClient(transport).request(1, 0, 0, 10, 10))
 
     def test_register_window_sends_identifier(self):
         transport = FakeTransport({"registerTextPikWindow": (True, [])})
         KWinPlacementClient(transport).register_window("abc")
-        assert transport.calls == [("registerTextPikWindow", ("abc",))]
+        self.assertEqual(transport.calls, [("registerTextPikWindow", ("abc",))])
 
     def test_register_window_without_identifier_sends_empty_string(self):
         transport = FakeTransport({"registerTextPikWindow": (True, [])})
         KWinPlacementClient(transport).register_window()
-        assert transport.calls == [("registerTextPikWindow", ("",))]
+        self.assertEqual(transport.calls, [("registerTextPikWindow", ("",))])
 
     def test_unregister_window_is_reachable(self):
         transport = FakeTransport({"unregisterTextPikWindow": (True, [])})
-        assert KWinPlacementClient(transport).unregister_window() is True
-        assert transport.methods() == ["unregisterTextPikWindow"]
+        self.assertTrue(KWinPlacementClient(transport).unregister_window())
+        self.assertEqual(transport.methods(), ["unregisterTextPikWindow"])
 
 
-class TestReadback:
+class ReadbackTest(unittest.TestCase):
     def _client(self, payload):
         return KWinPlacementClient(FakeTransport({"readback": (True, [payload])}))
 
     def test_parses_a_matching_confirmation(self):
         result = self._client("41,1,1440,720,320,90,DP-2").readback(41)
-        assert result == PlacementConfirmation(
-            revision=41, position=Point(1440, 720), size=(320, 90), output="DP-2"
-        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.revision, 41)
+        self.assertEqual(result.position.as_tuple(), (1440, 720))
+        self.assertEqual(result.size, (320, 90))
+        self.assertEqual(result.output, "DP-2")
+
+    def test_confirmation_matches_the_declared_type(self):
+        result = self._client("41,1,1440,720,320,90,DP-2").readback(41)
+        self.assertIsInstance(result, PlacementConfirmation)
 
     def test_missing_window_is_not_a_position(self):
-        assert self._client("41,0,0,0,0,0,").readback(41) is None
+        self.assertIsNone(self._client("41,0,0,0,0,0,").readback(41))
 
     def test_superseded_revision_is_rejected(self):
         """The effect replies with the revision it processed, not an echo."""
-        assert self._client("42,1,1440,720,320,90,DP-2").readback(41) is None
+        self.assertIsNone(self._client("42,1,1440,720,320,90,DP-2").readback(41))
 
     def test_empty_output_name_is_accepted(self):
         result = self._client("3,1,10,20,30,40,").readback(3)
-        assert result is not None
-        assert result.output == ""
+        self.assertIsNotNone(result)
+        self.assertEqual(result.output, "")
 
     def test_output_name_containing_commas_is_kept_whole(self):
         result = self._client("3,1,10,20,30,40,HDMI,A-1").readback(3)
-        assert result is not None
-        assert result.output == "HDMI,A-1"
+        self.assertIsNotNone(result)
+        self.assertEqual(result.output, "HDMI,A-1")
 
     def test_malformed_payload_is_rejected(self):
-        assert self._client("garbage").readback(1) is None
-        assert self._client("1,1,not,int,3,4,DP-2").readback(1) is None
-        assert self._client("").readback(1) is None
+        self.assertIsNone(self._client("garbage").readback(1))
+        self.assertIsNone(self._client("1,1,not,int,3,4,DP-2").readback(1))
+        self.assertIsNone(self._client("").readback(1))
 
     def test_transport_failure_yields_none(self):
         client = KWinPlacementClient(FakeTransport({"readback": RuntimeError("down")}))
-        assert client.readback(7) is None
+        self.assertIsNone(client.readback(7))
 
     def test_confirmation_serializes_for_logging(self):
         confirmation = PlacementConfirmation(
             revision=9, position=Point(1, 2), size=(3, 4), output="DP-2"
         )
-        assert confirmation.as_dict() == {
-            "revision": 9,
-            "position": (1, 2),
-            "size": (3, 4),
-            "output": "DP-2",
-        }
+        self.assertEqual(
+            confirmation.as_dict(),
+            {
+                "revision": 9,
+                "position": (1, 2),
+                "size": (3, 4),
+                "output": "DP-2",
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
