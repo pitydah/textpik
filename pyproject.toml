@@ -47,6 +47,7 @@ include = ["textpik_core*"]
     "docs/automations.md",
     "docs/architecture.md",
     "docs/action-manifest.schema.json",
+    "docs/kwin-placement-effect.md",
     "docs/release-checklist.md",
     "docs/roadmap.md",
     "SECURITY.md",

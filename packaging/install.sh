@@ -10,6 +10,9 @@ APP_DIR="$HOME/.local/share/$APP_NAME"
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 KWIN_SCRIPT_SOURCE="$APP_DIR/kwin/textpik-cursor-bridge"
 KWIN_SCRIPT_DEST="$HOME/.local/share/kwin/scripts/textpik-cursor-bridge"
+KWIN_EFFECT_SOURCE="$PROJECT_DIR/native/kwin-effect"
+KWIN_EFFECT_DEST="$HOME/.local/lib/qt6/plugins/kwin/effects"
+QT_PLUGIN_PATH_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/90-textpik-qt-plugin-path.conf"
 
 MISSING=()
 RUNTIME_PYTHON="python3"
@@ -193,6 +196,11 @@ install_binary() {
     cp -a "$PROJECT_DIR/src/textpik_core" "$APP_DIR/src/textpik_core"
     cp -a "$PROJECT_DIR/assets" "$APP_DIR/assets"
     cp -a "$PROJECT_DIR/kwin" "$APP_DIR/kwin"
+    if [[ -d "$PROJECT_DIR/native" ]]; then
+        cp -a "$PROJECT_DIR/native" "$APP_DIR/native"
+    fi
+    mkdir -p "$APP_DIR/scripts"
+    cp "$PROJECT_DIR/scripts/check_placement_backend.py" "$APP_DIR/scripts/"
     cp "$PROJECT_DIR/LICENSE" "$PROJECT_DIR/README.md" "$APP_DIR/"
 }
 
@@ -291,6 +299,82 @@ install_kwin_bridge() {
     fi
 }
 
+install_kwin_placement_effect() {
+    case "${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_DESKTOP:-}" in
+        *KDE*|*kde*|*Plasma*|*plasma*) ;;
+        *) info "Entorno no KDE: se omite el backend de placement."; return ;;
+    esac
+
+    if [[ ! -d "$KWIN_EFFECT_SOURCE" ]]; then
+        warn "Fuentes del efecto KWin no encontradas en $KWIN_EFFECT_SOURCE"
+        info "TextPik funciona igual; el popup queda sin placement verificado."
+        return
+    fi
+
+    # El efecto es opcional: si falta cualquier dependencia de compilacion se
+    # omite y TextPik arranca igual en modo degradado y explicito.
+    local missing_build=()
+    command -v cmake &>/dev/null || missing_build+=("cmake")
+    command -v ninja &>/dev/null || command -v make &>/dev/null || missing_build+=("ninja-build")
+    command -v c++ &>/dev/null || missing_build+=("gcc-c++")
+    [[ -f /usr/include/kwin/effect/effect.h ]] || missing_build+=("kwin-dev")
+    [[ -d /usr/include/KF6/KCoreAddons ]] || missing_build+=("kf6-kcoreaddons-dev")
+    [[ -d /usr/include/KF6/KConfigCore ]] || missing_build+=("kf6-kconfig-dev")
+    [[ -d /usr/include/KF6/KWindowSystem ]] || missing_build+=("kf6-kwindowsystem-dev")
+
+    if (( ${#missing_build[@]} > 0 )); then
+        warn "Faltan dependencias para compilar el efecto: ${missing_build[*]}"
+        info "TextPik funciona igual; solo se pierde el placement verificado en Plasma."
+        info "Instalalas y volve a correr este instalador para activarlo."
+        return
+    fi
+
+    local build_dir
+    build_dir="$(mktemp -d "${TMPDIR:-/tmp}/textpik-kwin-effect.XXXXXX")"
+    local generator="Ninja"
+    command -v ninja &>/dev/null || generator="Unix Makefiles"
+
+    if cmake -S "$KWIN_EFFECT_SOURCE" -B "$build_dir" -G "$generator" \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 && \
+       cmake --build "$build_dir" >/dev/null 2>&1; then
+        mkdir -p "$KWIN_EFFECT_DEST"
+        cp "$build_dir/textpik-placement.so" "$KWIN_EFFECT_DEST/"
+        ok "Efecto KWin compilado e instalado"
+
+        # Verificacion ABI + D-Bus antes de darlo por bueno.
+        if [[ -x "$build_dir/textpik-verify-effect" ]]; then
+            if "$build_dir/textpik-verify-effect" \
+                    "$build_dir/textpik-placement.so" >/dev/null 2>&1; then
+                ok "Efecto verificado contra la libkwin instalada"
+            else
+                warn "La verificacion del efecto fallo."
+                "$build_dir/textpik-verify-effect" \
+                    "$build_dir/textpik-placement.so" || true
+            fi
+        fi
+    else
+        warn "No se pudo compilar el efecto KWin."
+        info "TextPik funciona igual; el popup queda sin placement verificado."
+        rm -rf "$build_dir"
+        return
+    fi
+    rm -rf "$build_dir"
+
+    # KWin no agrega rutas de plugin de usuario y Qt solo mira /usr/lib/qt6/plugins,
+    # asi que el directorio tiene que exponerse a la sesion.
+    mkdir -p "$(dirname "$QT_PLUGIN_PATH_CONF")"
+    cat > "$QT_PLUGIN_PATH_CONF" <<EOF
+# Generado por TextPik: expone el directorio de plugins Qt del usuario para que
+# KWin encuentre el efecto de placement. Borra este archivo para desactivarlo.
+QT_PLUGIN_PATH=$HOME/.local/lib/qt6/plugins
+EOF
+    ok "QT_PLUGIN_PATH configurado para la sesion"
+
+    info "KWin carga los efectos solo al arrancar: cerra sesion y volve a entrar."
+    info "Despues verifica con:"
+    info "  python3 $APP_DIR/scripts/check_placement_backend.py"
+}
+
 main() {
     info "Instalando TextPik para escritorios Linux..."
 
@@ -302,6 +386,7 @@ main() {
     install_desktop_entry
     install_autostart
     install_kwin_bridge
+    install_kwin_placement_effect
 
     echo ""
     if [[ ${#MISSING[@]} -gt 0 ]]; then
