@@ -436,7 +436,26 @@ class WaylandTruthV14Test(unittest.TestCase):
         self.assertEqual(profile.pointer_position, CapabilityTruth.VERIFIED)
         self.assertEqual(profile.positioning, CapabilityTruth.DEGRADED)
         self.assertEqual(profile.outside_click, CapabilityTruth.DEGRADED)
-        self.assertIn("kwin-effect", profile.required_backend)
+        # A cursor bridge says nothing about placement: only the compositor
+        # effect can place the popup, so that is what the session still needs.
+        self.assertEqual(profile.required_backend, "kwin-placement-effect")
+        self.assertEqual(
+            profile.positioning_backend, "qt-xdg-toplevel-unverified"
+        )
+        self.assertEqual(profile.popup_parity, "degraded-wayland")
+
+    def test_plasma_placement_effect_upgrades_positioning_truth(self):
+        profile = build_wayland_profile(
+            platform_name="wayland",
+            desktop="KDE",
+            kwin_cursor_bridge=True,
+            kwin_activation_bridge=True,
+            kwin_placement_effect=True,
+        )
+        self.assertEqual(profile.positioning, CapabilityTruth.VERIFIED)
+        self.assertEqual(profile.positioning_backend, "kwin-effect")
+        self.assertEqual(profile.required_backend, "none")
+        self.assertEqual(profile.popup_parity, "verified-placement-degraded-input")
 
     def test_monitor_does_not_use_qt_buttons_as_wayland_global_state(self):
         # Behavioural: on Wayland the pointer state is UNKNOWN, so even a Qt
@@ -517,13 +536,16 @@ class AtspiV14Test(unittest.TestCase):
         monitor = BaseSelectionMonitor()
         app = SimpleNamespace(
             monitor=monitor,
-            popup=SimpleNamespace(is_interacting=lambda: False),
+            popup=SimpleNamespace(is_interacting=lambda: False, isVisible=lambda: False),
             atspi=SimpleNamespace(context_menu_active=lambda: False),
             settings={"popup_delay_ms": 0, "adaptive_delay_enabled": False},
             popup_state=Mock(),
             atspi_event_timer=Mock(),
             _begin_selection_session=lambda source: 1,
             _pending_atspi_node=None,
+            # A raw AT-SPI event records the session it arrived in so it can be
+            # dropped if another source moved on before the payload is read.
+            _selection_session=0,
         )
         self.assertEqual(monitor._last_selection_activity_at, 0.0)
         # The platform predicate must stay pinned across the whole assertion.

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 import weakref
 from pathlib import Path
+from types import SimpleNamespace
 from time import perf_counter_ns
 from unittest.mock import patch
 
@@ -634,13 +635,35 @@ class AnchorTest(unittest.TestCase):
         self.assertEqual(resolver.resolve([low, high]), high)
 
     def test_resolver_explains_source_and_normalizes_scale(self):
-        qt = PopupAnchor(10, 20, AnchorSource.QT_POINTER, 0.9)
+        # Qt's own pointer is capped at 0.72 in production (0.2 on Wayland), so
+        # selection geometry still outranks it as placement evidence.
+        qt = PopupAnchor(10, 20, AnchorSource.QT_POINTER, 0.72)
         atspi = PopupAnchor(11, 21, AnchorSource.ATSPI_SELECTION, 0.85)
         decision = AnchorResolver().resolve_with_reason((qt, atspi))
         self.assertEqual(decision.anchor, atspi)
         self.assertEqual(decision.reason, "atspi-selection")
         scaled = scale_anchor(atspi, 1.5)
         self.assertEqual((scaled.x, scaled.y), (16, 32))
+
+    def test_fresh_compositor_cursor_outranks_selection_geometry(self):
+        """The product contract is "popup next to the cursor".
+
+        AT-SPI geometry stays valuable as avoid/fallback evidence, but a fresh
+        compositor cursor must win the placement anchor even at high selection
+        confidence.
+        """
+        atspi = PopupAnchor(200, 300, AnchorSource.ATSPI_SELECTION, 0.95)
+        for source, confidence in (
+            (AnchorSource.KWIN, 0.98),
+            (AnchorSource.X11_POINTER, 0.96),
+            (AnchorSource.HYPRLAND, 0.94),
+            (AnchorSource.SWAY, 0.92),
+        ):
+            with self.subTest(source=source):
+                cursor = PopupAnchor(700, 460, source, confidence)
+                decision = AnchorResolver().resolve_with_reason((atspi, cursor))
+                self.assertEqual(decision.anchor, cursor)
+                self.assertEqual(decision.reason, source.value)
 
     @patch("src.textpik_core.anchors.shutil.which", return_value="/usr/bin/hyprctl")
     @patch("src.textpik_core.anchors._run_json", return_value={"x": 12.4, "y": 33.8})
@@ -1081,8 +1104,9 @@ class AtspiTest(unittest.TestCase):
         self.assertTrue(context.sensitive)
         self.assertEqual(context.text, "")
 
-    def test_replaces_selection_through_editable_interface(self):
-        calls = []
+    @staticmethod
+    def _live_selection_node(calls, *, focused=True, selected=(2, 5), text="old"):
+        """Build a node that passes the JIT revalidation before a mutation."""
 
         class Editable:
             def delete_text(self, start, end):
@@ -1091,24 +1115,104 @@ class AtspiTest(unittest.TestCase):
             def insert_text(self, start, text, length):
                 calls.append(("insert", start, text, length))
 
+        class TextInterface:
+            def get_selection(self, _index):
+                return selected
+
+            def get_text(self, start, end):
+                return text
+
+        class StateSet:
+            def contains(self, state):
+                # FOCUSED must hold and PROTECTED must not, otherwise the
+                # mutation is refused.
+                return state == "focused" if focused else False
+
+        class Role:
+            value_nick = "text"
+
         class Node:
             def get_editable_text_iface(self):
                 return Editable()
 
-        backend = AtspiSelectionBackend(atspi=object())
+            def get_state_set(self):
+                return StateSet()
+
+            def get_text_iface(self):
+                return TextInterface()
+
+            def get_role(self):
+                return Role()
+
+            def get_role_name(self):
+                return "text"
+
+        return Node()
+
+    def _atspi_stub(self):
+        state_type = SimpleNamespace(FOCUSED="focused", PROTECTED="protected")
+        return SimpleNamespace(StateType=state_type)
+
+    def test_replaces_selection_through_editable_interface(self):
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
         context = SelectionContext(
             text="old",
             editable=True,
             backend="atspi",
             selection_start=2,
             selection_end=5,
-            native_handle=Node(),
+            native_handle=self._live_selection_node(calls),
         )
         self.assertTrue(backend.replace_selection(context, "new"))
         self.assertEqual(
             calls,
             [("delete", 2, 5), ("insert", 2, "new", 3)],
         )
+
+    def test_refuses_to_mutate_when_the_target_selection_changed(self):
+        """Authority is revalidated immediately before mutating AT-SPI."""
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
+        context = SelectionContext(
+            text="old",
+            editable=True,
+            backend="atspi",
+            selection_start=2,
+            selection_end=5,
+            # The document moved on after the context was captured.
+            native_handle=self._live_selection_node(calls, selected=(2, 9)),
+        )
+        self.assertFalse(backend.replace_selection(context, "new"))
+        self.assertEqual(calls, [])
+
+    def test_refuses_to_mutate_when_the_target_lost_focus(self):
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
+        context = SelectionContext(
+            text="old",
+            editable=True,
+            backend="atspi",
+            selection_start=2,
+            selection_end=5,
+            native_handle=self._live_selection_node(calls, focused=False),
+        )
+        self.assertFalse(backend.replace_selection(context, "new"))
+        self.assertEqual(calls, [])
+
+    def test_refuses_to_mutate_when_the_selected_text_changed(self):
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
+        context = SelectionContext(
+            text="old",
+            editable=True,
+            backend="atspi",
+            selection_start=2,
+            selection_end=5,
+            native_handle=self._live_selection_node(calls, text="otro"),
+        )
+        self.assertFalse(backend.replace_selection(context, "new"))
+        self.assertEqual(calls, [])
 
     def test_selection_event_subscription_forwards_source(self):
         listeners = []

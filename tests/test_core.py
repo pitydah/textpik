@@ -651,7 +651,7 @@ class PopupCompositionTest(unittest.TestCase):
         popup.set_context(SimpleNamespace(text="texto capturado", application="Editor"))
         triggered = []
         popup.action_triggered.connect(
-            lambda command, text: triggered.append((command, text))
+            lambda command, text, _context: triggered.append((command, text))
         )
         popup._on_click(DEFAULT_ACTIONS[0])
         self.assertEqual(triggered, [("copy", "texto capturado")])

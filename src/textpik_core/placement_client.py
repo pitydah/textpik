@@ -22,7 +22,7 @@ INTERFACE_NAME = "org.textpik.KWinPlacement"
 
 # The placement call sits on the selection hot path, so the timeout is short
 # enough to notice a stalled compositor without delaying the popup.
-CALL_TIMEOUT_MS = 400
+CALL_TIMEOUT_MS = 150
 
 READBACK_FIELDS = 7
 """`revision,has_window,x,y,w,h,output`, mirroring the effect's readback()."""

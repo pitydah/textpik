@@ -81,12 +81,22 @@ public Q_SLOTS:
     Q_SCRIPTABLE void unregisterTextPikWindow();
 
 private:
+    bool isTextPikPopup(KWin::Window *window) const;
+
     /// Re-resolves the registered window after it was (re)created.
     void resolveWindow();
+
+    /// Applies the latest request once KWin has mapped the popup surface.
+    void applyPendingPlacement();
 
     QPointer<KWin::Window> m_window;
     QString m_registeredId;
     int m_revision = 0;
+    bool m_hasPendingPlacement = false;
+    int m_pendingX = 0;
+    int m_pendingY = 0;
+    int m_pendingWidth = 0;
+    int m_pendingHeight = 0;
 };
 
 /// Plugin factory for the effect.

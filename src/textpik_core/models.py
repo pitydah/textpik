@@ -206,6 +206,7 @@ class PopupPlacementResult:
             "observed_size": self.observed_size,
             "output": self.output,
             "revision": self.revision,
+            "active_revision": self.active_revision,
             "tolerance": self.tolerance,
             "verified": self.verified,
             "outcome": self.outcome.value,
@@ -250,6 +251,30 @@ class SelectionContext:
     backend: str = "clipboard"
     selection_rect: tuple[int, int, int, int] | None = None
     native_handle: Any = field(default=None, repr=False, compare=False)
+
+    def action_snapshot(self) -> "SelectionContext":
+        """Freeze the target that a visible popup action is allowed to mutate.
+
+        `native_handle` intentionally remains the same AT-SPI object; the
+        surrounding metadata and captured range are copied so a later selection
+        cannot retarget an already-visible action by replacing the application's
+        mutable `selection_context`.
+        """
+        return SelectionContext(
+            text=str(self.text),
+            anchor=self.anchor,
+            application=str(self.application),
+            role=str(self.role),
+            sensitive=bool(self.sensitive),
+            editable=bool(self.editable),
+            selection_start=self.selection_start,
+            selection_end=self.selection_end,
+            backend=str(self.backend),
+            selection_rect=(
+                tuple(self.selection_rect) if self.selection_rect is not None else None
+            ),
+            native_handle=self.native_handle,
+        )
 
 
 class ActionOperation(str, Enum):

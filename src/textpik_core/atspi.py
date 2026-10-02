@@ -216,10 +216,33 @@ class AtspiSelectionBackend:
         except Exception:
             return ""
 
-    def replace_selection(self, context: SelectionContext, replacement: str) -> bool:
+    def selection_still_matches(self, context: SelectionContext) -> bool:
+        """Revalidate authority immediately before mutating an AT-SPI target."""
         if context.backend != "atspi" or context.native_handle is None:
             return False
         if context.selection_start is None or context.selection_end is None:
+            return False
+        if context.sensitive:
+            return False
+
+        node = context.native_handle
+        try:
+            states = node.get_state_set()
+            if not states.contains(self.atspi.StateType.FOCUSED):
+                return False
+            text_iface = node.get_text_iface()
+            start, end = text_iface.get_selection(0)
+            if (start, end) != (context.selection_start, context.selection_end):
+                return False
+            role = self._role_name(node)
+            if self._is_protected(node, role):
+                return False
+            return text_iface.get_text(start, end) == context.text
+        except Exception:
+            return False
+
+    def replace_selection(self, context: SelectionContext, replacement: str) -> bool:
+        if not self.selection_still_matches(context):
             return False
         editable = self._editable(context.native_handle)
         if editable is None:

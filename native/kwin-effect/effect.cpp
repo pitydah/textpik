@@ -19,8 +19,10 @@ namespace TextPik
 static const char *const s_dbusService = "org.textpik.KWinPlacement";
 static const char *const s_dbusPath = "/KWinPlacement";
 
-/// The window identifier TextPik advertises; matches the Python side.
+/// Window identity advertised by the main popup; other TextPik top-levels must
+/// never be moved by the placement effect.
 static const char *const s_windowClass = "textpik";
+static const char *const s_windowCaption = "textpik-popup";
 
 TextPikPlacementEffect::TextPikPlacementEffect()
     : KWin::Effect()
@@ -34,11 +36,12 @@ TextPikPlacementEffect::TextPikPlacementEffect()
             }
             if (!m_registeredId.isEmpty() && w->internalId() == QUuid(m_registeredId)) {
                 m_window = w;
+                applyPendingPlacement();
                 return;
             }
-            if (m_window.isNull()
-                && w->resourceClass() == QLatin1String(s_windowClass)) {
+            if (m_window.isNull() && isTextPikPopup(w)) {
                 m_window = w;
+                applyPendingPlacement();
             }
         });
     }
@@ -73,6 +76,17 @@ void TextPikPlacementEffect::unregisterTextPikWindow()
 {
     m_window = nullptr;
     m_registeredId.clear();
+    m_hasPendingPlacement = false;
+}
+
+bool TextPikPlacementEffect::isTextPikPopup(KWin::Window *window) const
+{
+    if (!window || window->resourceClass() != QLatin1String(s_windowClass)) {
+        return false;
+    }
+    return window->caption().startsWith(
+        QLatin1String(s_windowCaption),
+        Qt::CaseInsensitive);
 }
 
 void TextPikPlacementEffect::resolveWindow()
@@ -96,38 +110,57 @@ void TextPikPlacementEffect::resolveWindow()
     }
 
     for (KWin::Window *w : windows) {
-        if (w && w->resourceClass() == QLatin1String(s_windowClass)) {
+        if (isTextPikPopup(w)) {
             m_window = w;
             return;
         }
     }
 }
 
-void TextPikPlacementEffect::requestPlacement(int revision, int x, int y, int w, int h)
+void TextPikPlacementEffect::applyPendingPlacement()
 {
-    if (m_window.isNull()) {
-        resolveWindow();
-    }
-
-    m_revision = revision;
-
-    if (m_window.isNull()) {
-        qWarning() << "textpik: placement requested but no popup window is known";
+    if (!m_hasPendingPlacement || m_window.isNull()) {
         return;
     }
 
     KWin::Window *window = m_window.data();
-
-    // Resize only when the popup really changed size, so repeated placement
-    // requests for the same selection do not fight the client.
     const QRectF current = window->frameGeometry();
-    const bool sizeMatches = std::abs(current.width() - w) <= 1
-        && std::abs(current.height() - h) <= 1;
-    if (!sizeMatches && w > 0 && h > 0) {
-        window->moveResize(KWin::RectF(x, y, w, h));
+    const bool sizeMatches = std::abs(current.width() - m_pendingWidth) <= 1
+        && std::abs(current.height() - m_pendingHeight) <= 1;
+
+    if (!sizeMatches && m_pendingWidth > 0 && m_pendingHeight > 0) {
+        window->moveResize(KWin::RectF(
+            m_pendingX,
+            m_pendingY,
+            m_pendingWidth,
+            m_pendingHeight));
     } else {
-        window->move(QPointF(x, y));
+        window->move(QPointF(m_pendingX, m_pendingY));
     }
+    m_hasPendingPlacement = false;
+}
+
+void TextPikPlacementEffect::requestPlacement(int revision, int x, int y, int w, int h)
+{
+    // The Python side can request placement immediately after show(). KWin may
+    // not have emitted windowAdded yet, so preserve the request and replay it
+    // from the windowAdded callback instead of silently losing the P0 action.
+    m_revision = revision;
+    m_pendingX = x;
+    m_pendingY = y;
+    m_pendingWidth = w;
+    m_pendingHeight = h;
+    m_hasPendingPlacement = true;
+
+    if (m_window.isNull()) {
+        resolveWindow();
+    }
+    if (m_window.isNull()) {
+        qDebug() << "textpik: placement queued until popup window is mapped"
+                 << "revision" << revision;
+        return;
+    }
+    applyPendingPlacement();
 }
 
 QString TextPikPlacementEffect::readback() const
@@ -160,9 +193,9 @@ bool TextPikPlacementEffectFactory::isSupported() const
 
 bool TextPikPlacementEffectFactory::enabledByDefault() const
 {
-    // TextPik probes for the effect and degrades loudly when it is absent, so
-    // loading it on every session would only add a D-Bus name for nothing.
-    return false;
+    // Once the optional plugin is installed, placement next to the cursor is a
+    // core product behaviour, not an opt-in enhancement.
+    return true;
 }
 
 KWin::Effect *TextPikPlacementEffectFactory::createEffect() const

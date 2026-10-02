@@ -5,7 +5,7 @@
         "Description": "Authoritative popup placement for TextPik",
         "License": "GPL-2.0-or-later",
         "Version": "0.5.0",
-        "EnabledByDefault": false,
+        "EnabledByDefault": true,
         "ServiceTypes": ["KWin/Effect"]
     }
 }

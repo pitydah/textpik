@@ -367,6 +367,7 @@ from PySide6.QtWidgets import (  # noqa: E402
     QDialogButtonBox,
     QFormLayout,
     QFileDialog,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -398,8 +399,8 @@ APP_VERSION = "0.5.0-rc.1"
 PLACEMENT_PROBE_TTL = 2.0
 # A freshly shown Wayland surface reaches the compositor a moment after show(),
 # so an unconfirmed placement is retried a few times before giving up.
-PLACEMENT_CONFIRM_ATTEMPTS = 4
-PLACEMENT_CONFIRM_INTERVAL_MS = 25
+PLACEMENT_CONFIRM_ATTEMPTS = 8
+PLACEMENT_CONFIRM_INTERVAL_MS = 20
 
 GITHUB_PROFILE_URL = "https://github.com/pitydah"
 GITHUB_SPONSORS_URL = "https://github.com/sponsors/pitydah"
@@ -1273,7 +1274,7 @@ class BaseSelectionMonitor(QObject):
                     delay = max(delay, 180)
             self.timer_debounce.start(delay)
 
-    def _selection_event(self, *args):
+    def _selection_event(self, *args, force_emit=None):
         if self.secondary_interaction_active():
             logger.debug("Evento de selección ignorado durante clic secundario")
             return
@@ -1281,10 +1282,11 @@ class BaseSelectionMonitor(QObject):
             logger.debug("Evento de selección propio ignorado")
             return
         self.note_selection_activity()
-        # Wayland notifications may repeat for the same PRIMARY payload when a
-        # context menu opens. A changed payload is sufficient to prove selection.
         revision = self._next_revision()
-        self._schedule_read(force_emit=not is_wayland(), revision=revision)
+        requested_force = (
+            not is_wayland() if force_emit is None else bool(force_emit)
+        )
+        self._schedule_read(force_emit=requested_force, revision=revision)
 
     def _secondary_button_pressed(self):
         try:
@@ -1389,7 +1391,8 @@ class BaseSelectionMonitor(QObject):
             return False
         text = str(raw_text or "").strip()
         now = time.monotonic()
-        should_emit = self._force_emit or text != self._last_text
+        forced = bool(self._force_emit)
+        should_emit = forced or text != self._last_text
         self._force_emit = False
         if not text:
             if self._last_text:
@@ -1410,7 +1413,11 @@ class BaseSelectionMonitor(QObject):
             return True
 
         if text and should_emit:
-            if text == self._last_emit_text and now - self._last_emit_at < 0.45:
+            if (
+                not forced
+                and text == self._last_emit_text
+                and now - self._last_emit_at < 0.12
+            ):
                 logger.debug("Seleccion duplicada ignorada")
                 return True
             logger.info("Seleccion detectada: %d caracteres", len(text))
@@ -1575,7 +1582,9 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
                 return
             self._last_wl_paste_event_at = now
             logger.info("Cambio de seleccion PRIMARY recibido desde wl-paste")
-            self._selection_event()
+            # An explicit PRIMARY change can legitimately carry the same text
+            # in a new physical selection gesture.
+            self._selection_event(force_emit=True)
 
     def _start_klipper_signal_monitor(self):
         if not check_command("dbus-monitor"):
@@ -1599,7 +1608,7 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
         output = bytes(self._dbus_monitor.readAllStandardOutput())
         if b"selectionChanged" in output:
             logger.info("Klipper selectionChanged recibido")
-            self._selection_event()
+            self._selection_event(force_emit=True)
 
     def _debounce_expired(self):
         if not self._use_wl_paste:
@@ -2242,7 +2251,7 @@ class InformationPopup(QWidget):
 
 
 class PopupWindow(QWidget):
-    action_triggered = Signal(str, str)
+    action_triggered = Signal(str, str, object)
     pin_requested = Signal(str)
     suppress_app_requested = Signal(str)
     interaction_started = Signal()
@@ -2254,7 +2263,9 @@ class PopupWindow(QWidget):
         self.actions = actions
         self.monitor = monitor
         self.settings = settings or dict(DEFAULT_SETTINGS)
-        self.setWindowTitle(APP_NAME)
+        # Unique compositor-visible identity: the KWin Effect must never move
+        # Settings, information dialogs or any other TextPik top-level.
+        self.setWindowTitle("textpik-popup")
         self.setAccessibleName("Barra de acciones de TextPik")
         self.setAccessibleDescription(
             "Acciones disponibles para el texto seleccionado"
@@ -2282,6 +2293,7 @@ class PopupWindow(QWidget):
         self._pointer_inside = False
         self._application = ""
         self._selection_text = ""
+        self._selection_context = SelectionContext(text="")
         self._last_stable_position = None
         self._last_position_at = 0.0
         self._last_pointer_sample = None
@@ -2291,9 +2303,14 @@ class PopupWindow(QWidget):
         self._placement_client = None
         self._placement_choice = None
         self._placement_probed_at = 0.0
+        self._placement_effect_available = False
         self._placement_lease = PresentationLease()
         self._placement_attempt = 0
         self.last_placement_result = None
+        self._placement_opacity_effect = QGraphicsOpacityEffect(self)
+        self._placement_opacity_effect.setOpacity(1.0)
+        self.setGraphicsEffect(self._placement_opacity_effect)
+        self._placement_hidden_for_authority = False
         self.keyboard_mode = False
         self.palette = ActionPalette(self)
         self.palette.action_triggered.connect(self._on_click)
@@ -2643,8 +2660,39 @@ class PopupWindow(QWidget):
         self.palette.open_for(actions, button, self.settings, self._application)
 
     def set_context(self, context):
-        self._application = str(getattr(context, "application", "") or "").strip()
-        self._selection_text = str(getattr(context, "text", "") or "")
+        if isinstance(context, SelectionContext):
+            frozen = context.action_snapshot()
+        else:
+            frozen = SelectionContext(
+                text=str(getattr(context, "text", "") or ""),
+                anchor=getattr(context, "anchor", None),
+                application=str(getattr(context, "application", "") or ""),
+                role=str(getattr(context, "role", "") or ""),
+                sensitive=bool(getattr(context, "sensitive", False)),
+                editable=bool(getattr(context, "editable", False)),
+                selection_start=getattr(context, "selection_start", None),
+                selection_end=getattr(context, "selection_end", None),
+                backend=str(getattr(context, "backend", "clipboard") or "clipboard"),
+                selection_rect=getattr(context, "selection_rect", None),
+                native_handle=getattr(context, "native_handle", None),
+            )
+        self._selection_context = frozen
+        self._application = str(frozen.application or "").strip()
+        self._selection_text = str(frozen.text or "")
+
+    def set_placement_effect_available(self, available):
+        available = bool(available)
+        if available == self._placement_effect_available:
+            return
+        self._placement_effect_available = available
+        self._placement_choice = None
+        self._placement_probed_at = 0.0
+
+    def _set_placement_revealed(self, revealed):
+        revealed = bool(revealed)
+        self._placement_hidden_for_authority = not revealed
+        self._placement_opacity_effect.setOpacity(1.0 if revealed else 0.0)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, not revealed)
 
     def set_keyboard_mode(self, enabled):
         enabled = bool(enabled)
@@ -2670,13 +2718,15 @@ class PopupWindow(QWidget):
         text = self._selection_text or (
             self.monitor.get_last_text() if self.monitor else ""
         )
+        context = self._selection_context.action_snapshot()
         self.hide()
-        self.action_triggered.emit(cmd, text)
+        self.action_triggered.emit(cmd, text, context)
 
     def hideEvent(self, event):
         # A hidden popup has no current request, so any confirmation still in
         # flight must be dropped instead of mutating the placement state.
         self._placement_lease.release()
+        self._set_placement_revealed(True)
         self.dismissed.emit()
         super().hideEvent(event)
 
@@ -2847,12 +2897,31 @@ class PopupWindow(QWidget):
         else:
             logger.warning("Popup: no se encontro pantalla para cursor=(%s,%s)", cx, cy)
 
+        choice = self._placement_backend_choice()
+        cloak_for_compositor = (
+            requested_point is not None
+            and choice.backend == PlacementBackend.KWIN_EFFECT
+        )
+        self._set_placement_revealed(not cloak_for_compositor)
+
+        # Mapping must happen before the compositor can know the Wayland
+        # surface. The KWin Effect queues an early request until windowAdded,
+        # while the graphics-effect cloak prevents the user from seeing KWin's
+        # temporary centre-screen placement.
         self.show()
         self.raise_()
         logger.info("Popup visible=%s size=%sx%s", self.isVisible(), width, height)
 
         if requested_point is not None:
-            self._report_placement(desired_point, requested_point, width, height)
+            self._report_placement(
+                desired_point,
+                requested_point,
+                width,
+                height,
+                choice=choice,
+            )
+        else:
+            self._set_placement_revealed(True)
 
     def _placement_backend_choice(self):
         """Resolve, with a short cache, who is allowed to place the popup."""
@@ -2867,9 +2936,9 @@ class PopupWindow(QWidget):
         desktop = detect_desktop_environment()
         effect_available = None
         if "wayland" in platform_name.casefold() and is_kde_desktop(desktop):
-            if self._placement_client is None:
+            effect_available = self._placement_effect_available
+            if effect_available and self._placement_client is None:
                 self._placement_client = KWinPlacementClient()
-            effect_available = self._placement_client.available()
         self._placement_choice = select_placement_backend(
             platform_name=platform_name,
             desktop=desktop,
@@ -2878,14 +2947,14 @@ class PopupWindow(QWidget):
         self._placement_probed_at = now
         return self._placement_choice
 
-    def _report_placement(self, desired, requested, width, height):
+    def _report_placement(self, desired, requested, width, height, *, choice=None):
         """Record where the popup was asked to go and who may confirm it.
 
         On Wayland the toolkit cannot place a toplevel, so the local position is
         a request and nothing more.  The popup is only reported as verified when
         the compositor-side authority confirms the same revision and geometry.
         """
-        choice = self._placement_backend_choice()
+        choice = choice or self._placement_backend_choice()
 
         if choice.backend == PlacementBackend.KWIN_EFFECT:
             self._start_kwin_placement(desired, requested, width, height)
@@ -2907,6 +2976,7 @@ class PopupWindow(QWidget):
             observed_size=observed_size,
         )
         self.last_placement_result = result
+        self._set_placement_revealed(True)
         logger.info(
             "Popup placement backend=%s outcome=%s verified=%s requested=%s observed=%s",
             result.backend.value,
@@ -2946,7 +3016,18 @@ class PopupWindow(QWidget):
         """
         client = self._placement_client
         confirmation = client.readback(revision) if client else None
-        if confirmation is None and self._placement_attempt < PLACEMENT_CONFIRM_ATTEMPTS - 1:
+        matches = bool(
+            confirmation
+            and abs(confirmation.position.x - requested.x) <= 2
+            and abs(confirmation.position.y - requested.y) <= 2
+            and abs(confirmation.size[0] - width) <= 2
+            and abs(confirmation.size[1] - height) <= 2
+        )
+        if (
+            not matches
+            and self._placement_hidden_for_authority
+            and self._placement_attempt < PLACEMENT_CONFIRM_ATTEMPTS - 1
+        ):
             self._placement_attempt += 1
             QTimer.singleShot(
                 PLACEMENT_CONFIRM_INTERVAL_MS,
@@ -2956,7 +3037,13 @@ class PopupWindow(QWidget):
             )
             return
         self._store_placement_result(
-            desired, requested, width, height, revision, confirmation, None
+            desired,
+            requested,
+            width,
+            height,
+            revision,
+            confirmation,
+            None if confirmation is not None else "effect-timeout",
         )
 
     def _retry_placement_confirmation(self, revision, desired, requested, width, height):
@@ -2981,6 +3068,7 @@ class PopupWindow(QWidget):
             error=error,
         )
         self.last_placement_result = result
+        self._set_placement_revealed(True)
         logger.info(
             "Popup placement backend=%s outcome=%s verified=%s revision=%s"
             " active=%s requested=%s observed=%s output=%s error=%s",
@@ -5655,6 +5743,7 @@ class TextPikApp(QObject):
         self._popup_immunity_until = 0.0
         self._selection_released = False
         self._last_popup_text = ""
+        self._last_popup_session = -1
         self._last_popup_at = 0.0
         self._last_intent_confidence = 0.0
         self._last_context_profile = ""
@@ -5704,6 +5793,9 @@ class TextPikApp(QObject):
         self.service_probe_timer = QTimer(self)
         self.service_probe_timer.timeout.connect(self._refresh_service_cache)
         self.service_probe_timer.start(10000)
+        # Populate placement/service truth at startup so the selection hot path
+        # never needs to synchronously probe D-Bus just to choose a backend.
+        self._refresh_service_cache()
 
         self.hide_check_timer = QTimer(self)
         self.hide_check_timer.timeout.connect(self.hide_popup_on_external_click)
@@ -5880,7 +5972,11 @@ class TextPikApp(QObject):
     def _refresh_service_cache(self):
         # Force refresh before action planning needs integration availability.
         self._service_cache = (0.0, self._service_cache[1])
-        self._desktop_dbus_services()
+        services = self._desktop_dbus_services()
+        if hasattr(self, "popup"):
+            self.popup.set_placement_effect_available(
+                "org.textpik.KWinPlacement" in services
+            )
 
     def _begin_selection_session(self, source):
         self._selection_session += 1
@@ -5946,13 +6042,15 @@ class TextPikApp(QObject):
             logger.debug("Evento AT-SPI ignorado durante menú contextual")
             self._suppress_popup("secondary-click")
             return
-        session_id = self._begin_selection_session("atspi-event")
-        # AT-SPI never routes through _selection_event, so the Wayland quiet
-        # period would otherwise read a zeroed timestamp and always accept.
+        # A raw AT-SPI event has no payload yet. It is evidence, not authority:
+        # never invalidate a clipboard selection until the payload has been read.
+        base_session = self._selection_session
         self.monitor.note_selection_activity()
-        self._pending_atspi_node = (node, session_id, time.monotonic())
-        # Accessibility events can arrive before the final range is committed.
-        self.popup_state.transition(PopupPhase.STABILIZING)
+        self._pending_atspi_node = (node, base_session, time.monotonic())
+        # Do not demote a visible popup merely because an unconfirmed AT-SPI
+        # event arrived.
+        if not self.popup.isVisible():
+            self.popup_state.transition(PopupPhase.STABILIZING)
         delay = max(45, self.settings.get("popup_delay_ms", 0))
         if self.settings.get("adaptive_delay_enabled", True):
             delay = max(delay, self.settings.get("adaptive_delay_min_ms", 55))
@@ -5978,12 +6076,16 @@ class TextPikApp(QObject):
         pending, self._pending_atspi_node = self._pending_atspi_node, None
         if pending is None:
             return
-        node, session_id, queued_at = pending
-        if not self._selection_session_is_current(session_id):
-            logger.debug("Evento AT-SPI obsoleto descartado: %s", session_id)
+        node, base_session, queued_at = pending
+        if base_session != self._selection_session:
+            logger.debug(
+                "Evento AT-SPI sin payload descartado tras cambio de sesión: %s -> %s",
+                base_session,
+                self._selection_session,
+            )
             return
         context = node if isinstance(node, SelectionContext) else self.atspi.read_selection(node)
-        if not self._selection_session_is_current(session_id):
+        if base_session != self._selection_session:
             return
         if context is None:
             if not self.popup.isVisible():
@@ -6006,14 +6108,27 @@ class TextPikApp(QObject):
             desired = min(desired, self.settings.get("adaptive_delay_max_ms", 180))
             elapsed_ms = (time.monotonic() - queued_at) * 1000
             if elapsed_ms + 4 < desired:
-                self._pending_atspi_node = (context, session_id, queued_at)
+                # Still waiting out the adaptive delay: re-queue against the
+                # session the event arrived in, not a new one. The payload is
+                # not confirmed yet, so it must not claim a generation.
+                self._pending_atspi_node = (context, base_session, queued_at)
                 self.atspi_event_timer.start(max(5, round(desired - elapsed_ms)))
                 return
         if len(context.text.strip()) > self.settings.get("max_selection_length", 5000):
             self.hide_popup(invalidate_session=False)
             return
+
+        text = context.text.strip()
         self.selection_context = context
-        self.monitor._last_text = context.text.strip()
+        self.monitor._last_text = text
+
+        # If clipboard already owns this same session, enrich its immutable
+        # action target instead of spawning a competing generation.
+        if base_session > 0 and self.popup.isVisible():
+            self.popup.set_context(context)
+            return
+
+        session_id = self._begin_selection_session("atspi-confirmed")
         self.show_popup(context=context, session_id=session_id)
 
     def hotkey_triggered(self):
@@ -6331,7 +6446,16 @@ class TextPikApp(QObject):
             bridge_status = f"activo ({x},{y}, hace {age:.1f}s)"
 
         enabled_actions = len([a for a in self.actions if a.get("enabled", True)])
-        popup_geo = self.popup.geometry() if hasattr(self, "popup") else "sin popup"
+        placement = (
+            self.popup.last_placement_result
+            if hasattr(self, "popup")
+            else None
+        )
+        popup_geo = (
+            placement.as_dict()
+            if placement is not None
+            else "sin placement observado"
+        )
         performance = getattr(self, "performance", None)
         performance_lines = []
         if performance is not None:
@@ -6366,7 +6490,7 @@ class TextPikApp(QObject):
             f"Autoinicio: {'activo' if AUTOSTART_FILE.exists() else 'inactivo'}",
             f"Puente KWin: {bridge_status}",
             f"Popup visible: {'si' if self.popup.isVisible() else 'no'}",
-            f"Popup geometry: {popup_geo}",
+            f"Popup placement: {popup_geo}",
             f"Acciones habilitadas: {enabled_actions}/{len(self.actions)}",
             f"Extensiones rechazadas: {len(self.extension_issues)}",
             f"Confianza última selección: {self._last_intent_confidence:.0%}",
@@ -6471,9 +6595,12 @@ class TextPikApp(QObject):
             self._suppress_popup("activity")
             return
         text = self.monitor.get_last_text().strip()
-        atspi_context = context or (
-            self.atspi.read_selection() if self.atspi.available else None
-        )
+        # Automatic selection display must not traverse AT-SPI synchronously on
+        # the popup hot path. Rich AT-SPI context arrives through the subscribed
+        # event/poll path. An explicit keyboard invocation may pay the cost.
+        atspi_context = context
+        if force and atspi_context is None and self.atspi.available:
+            atspi_context = self.atspi.read_selection()
         if not force and self.atspi.context_menu_active():
             self.monitor.suppress_secondary_interaction()
             logger.info("Selección automática ignorada: menú contextual activo")
@@ -6559,6 +6686,7 @@ class TextPikApp(QObject):
             if (
                 not force
                 and self.popup.isVisible()
+                and session_id == self._last_popup_session
                 and text == self._last_popup_text
                 and now - self._last_popup_at < 0.7
             ):
@@ -6644,6 +6772,7 @@ class TextPikApp(QObject):
             self.performance.observe("popup-hot-path", hot_path_started)
             self._animate_popup_fade_in()
             self._last_popup_text = text
+            self._last_popup_session = session_id
             self._last_popup_at = now
             self._popup_immunity_until = time.monotonic() + 1.25
             self._selection_released = self.monitor.selection_input_ready()
@@ -6718,6 +6847,7 @@ class TextPikApp(QObject):
                 "org.gnome.Shell.Extensions.GSConnect",
                 "org.freedesktop.portal.Desktop",
                 "org.freedesktop.secrets",
+                "org.textpik.KWinPlacement",
             ):
                 reply = interface.isServiceRegistered(name) if interface else None
                 if reply and reply.isValid() and bool(reply.value()):
@@ -6783,8 +6913,16 @@ class TextPikApp(QObject):
         self._schedule_runtime_probe()
         self._show_toast(f"TextPik no se mostrará en {application}")
 
-    def execute_action(self, cmd, text):
+    def execute_action(self, cmd, text, context=None):
         text = text or ""
+        if isinstance(context, SelectionContext):
+            action_context = context.action_snapshot()
+        elif isinstance(getattr(self, "selection_context", None), SelectionContext):
+            action_context = self.selection_context.action_snapshot()
+        else:
+            # Unit-level/legacy callers that dispatch non-mutating actions do
+            # not need an AT-SPI target, but still get an immutable context.
+            action_context = SelectionContext(text=text)
         manifest = next(
             (
                 action
@@ -6805,8 +6943,8 @@ class TextPikApp(QObject):
         if cmd == "cut":
             self.monitor.suppress_events()
             self.copy_text_to_clipboard(text)
-            if self.atspi.replace_selection(self.selection_context, ""):
-                self.undo.remember(text, "", self.selection_context.application)
+            if self.atspi.replace_selection(action_context, ""):
+                self.undo.remember(text, "", action_context.application)
                 self._show_toast("Selección cortada")
             else:
                 self._show_toast("Texto copiado; la aplicación no permite cortar")
@@ -6925,7 +7063,7 @@ class TextPikApp(QObject):
             if result == text:
                 self._show_toast("El texto ya tiene ese formato")
                 return
-            replaced = self.atspi.replace_selection(self.selection_context, result)
+            replaced = self.atspi.replace_selection(action_context, result)
             if not replaced:
                 QApplication.clipboard().setText(result)
                 self._show_toast("Resultado copiado; la app no permite reemplazo directo")
@@ -6933,7 +7071,7 @@ class TextPikApp(QObject):
                 self.undo.remember(
                     text,
                     result,
-                    self.selection_context.application,
+                    action_context.application,
                 )
                 self._show_toast("Selección reemplazada")
             return
@@ -6949,9 +7087,9 @@ class TextPikApp(QObject):
 
         if cmd in {"slugify", "clean-terminal"}:
             result = slugify(text) if cmd == "slugify" else clean_terminal_text(text)
-            replaced = self.atspi.replace_selection(self.selection_context, result)
+            replaced = self.atspi.replace_selection(action_context, result)
             if replaced:
-                self.undo.remember(text, result, self.selection_context.application)
+                self.undo.remember(text, result, action_context.application)
                 self._show_toast("Selección reemplazada")
             else:
                 QApplication.clipboard().setText(result)
@@ -6964,8 +7102,8 @@ class TextPikApp(QObject):
             except (ValueError, TypeError, json.JSONDecodeError) as exc:
                 self.popup.show_inline_result("JSON inválido", str(exc))
                 return
-            if self.atspi.replace_selection(self.selection_context, result):
-                self.undo.remember(text, result, self.selection_context.application)
+            if self.atspi.replace_selection(action_context, result):
+                self.undo.remember(text, result, action_context.application)
                 self._show_toast("JSON actualizado")
             else:
                 QApplication.clipboard().setText(result)
@@ -7062,15 +7200,15 @@ class TextPikApp(QObject):
             return
 
         if cmd == "grammar":
-            self._check_grammar(text)
+            self._check_grammar(text, action_context)
             return
 
         if cmd == "undo":
-            record = self.undo.pop(self.selection_context.application)
+            record = self.undo.pop(action_context.application)
             if record is None:
                 self._show_toast("No hay cambios recientes para deshacer")
                 return
-            if self.atspi.replace_selection(self.selection_context, record.before):
+            if self.atspi.replace_selection(action_context, record.before):
                 self._show_toast("Cambio deshecho")
             else:
                 QApplication.clipboard().setText(record.before)
@@ -7090,7 +7228,7 @@ class TextPikApp(QObject):
             return
 
         if cmd.startswith("automation:"):
-            self._run_automation(cmd.split(":", 1)[1], text)
+            self._run_automation(cmd.split(":", 1)[1], text, action_context)
             return
 
         if cmd.startswith("wasi:"):
@@ -7115,7 +7253,7 @@ class TextPikApp(QObject):
             return
 
         if cmd == "spellcheck":
-            self._check_spelling(text)
+            self._check_spelling(text, action_context)
             return
 
         if cmd == "kdeconnect":
@@ -7193,7 +7331,7 @@ class TextPikApp(QObject):
         )
         self._start_worker(worker)
 
-    def _check_spelling(self, text):
+    def _check_spelling(self, text, context=None):
         """Resolve spelling only after an explicit action, outside the hot path."""
         word = self.spelling.eligible_word(text)
         if not word:
@@ -7203,7 +7341,11 @@ class TextPikApp(QObject):
                 "Selecciona una sola palabra de entre 2 y 64 caracteres.",
             )
             return
-        context = self.selection_context
+        context = (
+            context.action_snapshot()
+            if isinstance(context, SelectionContext)
+            else self.selection_context.action_snapshot()
+        )
         session_id = self._selection_session
         languages = self.spelling.language_candidates(
             text,
@@ -7303,9 +7445,14 @@ class TextPikApp(QObject):
                 accepted.append(dict(flow, id=identifier, name=name))
         return accepted
 
-    def _run_automation(self, identifier, text):
+    def _run_automation(self, identifier, text, context=None):
+        action_context = (
+            context.action_snapshot()
+            if isinstance(context, SelectionContext)
+            else self.selection_context.action_snapshot()
+        )
         flow = next((item for item in self.automations if item["id"] == identifier), None)
-        if flow is None or not automation_matches(flow, self.selection_context, self._last_text_types):
+        if flow is None or not automation_matches(flow, action_context, self._last_text_types):
             self._show_toast("La automatización no coincide con este contexto")
             return
         try:
@@ -7322,11 +7469,11 @@ class TextPikApp(QObject):
         )
         if answer != QMessageBox.Yes:
             return
-        if self.atspi.replace_selection(self.selection_context, preview.after):
+        if self.atspi.replace_selection(action_context, preview.after):
             self.undo.remember(
                 preview.before,
                 preview.after,
-                self.selection_context.application,
+                action_context.application,
             )
             self._show_toast("Automatización aplicada")
         else:
@@ -7438,10 +7585,14 @@ class TextPikApp(QObject):
         )
         self._start_worker(worker)
 
-    def _check_grammar(self, text):
+    def _check_grammar(self, text, context=None):
         if not text.strip():
             return
-        context = self.selection_context
+        context = (
+            context.action_snapshot()
+            if isinstance(context, SelectionContext)
+            else self.selection_context.action_snapshot()
+        )
         session_id = self._selection_session
         self._show_toast("Revisando gramática con LanguageTool…")
         language = self.settings.get("grammar_language", "auto")
@@ -7998,6 +8149,10 @@ exec bash -i
             kwin_activation_bridge=bool(
                 is_qt_wayland() and getattr(self, "cursor_bridge", None)
             ),
+            kwin_placement_effect=bool(
+                is_qt_wayland()
+                and "org.textpik.KWinPlacement" in services
+            ),
         )
         payload = {
             "application": APP_NAME,
@@ -8028,6 +8183,18 @@ exec bash -i
             "secret_service": "org.freedesktop.secrets" in services,
             "anchor_provider": getattr(self, "_last_anchor_decision", "unknown"),
             "wayland_capabilities": wayland_profile.as_dict(),
+            "popup_placement": (
+                placement_result.as_dict()
+                if (
+                    (placement_result := getattr(
+                        getattr(self, "popup", None),
+                        "last_placement_result",
+                        None,
+                    ))
+                    is not None
+                )
+                else None
+            ),
             "previous_run_unclean": bool(
                 getattr(getattr(self, "previous_run", None), "unclean", False)
             ),

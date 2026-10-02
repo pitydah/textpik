@@ -55,6 +55,7 @@ def build_wayland_profile(
     desktop: str,
     kwin_cursor_bridge: bool = False,
     kwin_activation_bridge: bool = False,
+    kwin_placement_effect: bool = False,
 ) -> WaylandCapabilityProfile:
     platform = str(platform_name or "").casefold()
     family = _desktop_family(desktop)
@@ -87,10 +88,26 @@ def build_wayland_profile(
                 if kwin_activation_bridge
                 else CapabilityTruth.UNAVAILABLE
             ),
-            positioning=CapabilityTruth.DEGRADED,
-            positioning_backend="qt-xdg-toplevel-best-effort",
-            required_backend="kwin-effect-or-real-layer-shell-presentation",
-            popup_parity="degraded-wayland",
+            positioning=(
+                CapabilityTruth.VERIFIED
+                if kwin_placement_effect
+                else CapabilityTruth.DEGRADED
+            ),
+            positioning_backend=(
+                "kwin-effect"
+                if kwin_placement_effect
+                else "qt-xdg-toplevel-unverified"
+            ),
+            required_backend=(
+                "none"
+                if kwin_placement_effect
+                else "kwin-placement-effect"
+            ),
+            popup_parity=(
+                "verified-placement-degraded-input"
+                if kwin_placement_effect
+                else "degraded-wayland"
+            ),
         )
 
     if family == "gnome":

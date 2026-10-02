@@ -23,6 +23,23 @@ GRAMMAR_ENDPOINT_INVALID = "invalid"
 GRAMMAR_ENDPOINT_UNREACHABLE = "unreachable"
 
 
+# Plain HTTP to a remote LanguageTool is allowed only for address ranges TextPik
+# explicitly defines as local-link/private LAN. Do not delegate this security
+# boundary to `ipaddress.is_private`: its meaning is "not globally reachable"
+# and its classifications have changed between Python releases.
+_PRIVATE_LAN_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "169.254.0.0/16",
+        "fc00::/7",
+        "fe80::/10",
+    )
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ActionAvailability:
     available: bool
@@ -153,7 +170,10 @@ def _host_is_private(hostname: str) -> bool:
         address = ipaddress.ip_address(host)
     except ValueError:
         return False
-    return address.is_private or address.is_link_local
+    return any(
+        address.version == network.version and address in network
+        for network in _PRIVATE_LAN_NETWORKS
+    )
 
 
 def grammar_endpoint_verdict(

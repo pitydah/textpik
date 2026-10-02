@@ -12,11 +12,15 @@ from .models import AnchorSource, PopupAnchor
 
 
 SOURCE_WEIGHT = {
-    AnchorSource.ATSPI_SELECTION: 0.08,
-    AnchorSource.KWIN: 0.07,
-    AnchorSource.HYPRLAND: 0.06,
-    AnchorSource.SWAY: 0.06,
-    AnchorSource.X11_POINTER: 0.05,
+    # TextPik's primary product contract is "popup next to the cursor".
+    # Fresh compositor/global pointer evidence therefore outranks selection
+    # geometry. AT-SPI still supplies valuable avoid geometry and is the best
+    # fallback when no authoritative cursor source exists.
+    AnchorSource.KWIN: 0.15,
+    AnchorSource.X11_POINTER: 0.15,
+    AnchorSource.HYPRLAND: 0.15,
+    AnchorSource.SWAY: 0.15,
+    AnchorSource.ATSPI_SELECTION: 0.04,
     AnchorSource.QT_POINTER: 0.0,
     AnchorSource.SCREEN_FALLBACK: -0.1,
 }
@@ -166,7 +170,7 @@ class AnchorResolver:
         winner = max(
             usable,
             key=lambda item: (
-                min(1.0, item.confidence + SOURCE_WEIGHT.get(item.source, 0.0)),
+                item.confidence + SOURCE_WEIGHT.get(item.source, 0.0),
                 item.created_at,
             ),
         )
