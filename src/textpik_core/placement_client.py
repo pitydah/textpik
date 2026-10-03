@@ -64,10 +64,17 @@ class PlacementTransport(Protocol):
 
 
 class QtDBusPlacementTransport:
-    """QtDBus-backed transport against the placement effect."""
+    """QtDBus-backed transport against the placement effect.
 
-    def __init__(self, timeout_ms: int = CALL_TIMEOUT_MS) -> None:
+    ``service_name`` exists so a test can host its own well-formed service
+    instead of depending on whether the real effect is loaded.
+    """
+
+    def __init__(
+        self, timeout_ms: int = CALL_TIMEOUT_MS, service_name: str = SERVICE_NAME
+    ) -> None:
         self._timeout_ms = timeout_ms
+        self._service_name = service_name
         self._interface: Any = None
         # QDBusPendingCallWatcher is owned by Python: without a live reference
         # the watcher is collected before it can deliver its reply.
@@ -79,7 +86,7 @@ class QtDBusPlacementTransport:
             from PySide6.QtDBus import QDBusConnection, QDBusInterface
 
             interface = QDBusInterface(
-                SERVICE_NAME,
+                self._service_name,
                 OBJECT_PATH,
                 INTERFACE_NAME,
                 QDBusConnection.sessionBus(),
@@ -102,7 +109,14 @@ class QtDBusPlacementTransport:
             return False, []
 
         try:
-            reply = interface.call(method, *args)
+            # PySide6's variadic form takes at most four arguments and
+            # requestPlacement sends five, so the list form is the only
+            # reliable one. It also needs the call mode spelled out.
+            from PySide6.QtDBus import QDBus
+
+            reply = interface.callWithArgumentList(
+                QDBus.CallMode.AutoDetect, method, list(args)
+            )
         except Exception as exc:  # pragma: no cover - depends on the bus
             self.error = f"call-failed: {exc}"
             return False, []
@@ -134,7 +148,10 @@ class QtDBusPlacementTransport:
             return
 
         try:
-            pending = interface.asyncCall(method, *args)
+            # PySide6 exposes only the list form here: asyncCall() takes a single
+            # argument, so calling it with the method and its arguments raises
+            # TypeError and every asynchronous placement would fail.
+            pending = interface.asyncCallWithArgumentList(method, list(args))
         except Exception as exc:  # pragma: no cover - depends on the bus
             self.error = f"call-failed: {exc}"
             on_done(False, [])

@@ -164,6 +164,9 @@ class AsyncPlacementTest(unittest.TestCase):
         self.assertEqual(transport.async_calls, [])
 
 
+TEST_SERVICE_NAME = "org.textpik.KWinPlacementTest"
+
+
 class QtDBusAsyncTransportTest(unittest.TestCase):
     """The real transport must defer its reply instead of blocking the caller.
 
@@ -175,7 +178,6 @@ class QtDBusAsyncTransportTest(unittest.TestCase):
 
     def setUp(self):
         try:
-            from PySide6.QtCore import QObject
             from PySide6.QtDBus import QDBusConnection
         except ImportError:  # pragma: no cover - depends on Qt install
             self.skipTest("QtDBus no disponible")
@@ -184,28 +186,55 @@ class QtDBusAsyncTransportTest(unittest.TestCase):
         if not self.bus.isConnected():
             self.skipTest("sin bus de sesion")
 
-        self.owned_service = bool(self.bus.registerService(SERVICE_NAME))
-        self.holder = QObject()
-        self.bus.registerObject(
-            OBJECT_PATH, self.holder, QDBusConnection.ExportAllSlots
-        )
+        self.service_name = TEST_SERVICE_NAME
+        self.owned_service = bool(self.bus.registerService(self.service_name))
+        if not self.owned_service:
+            self.skipTest(f"{self.service_name} ya esta tomado")
+        # El objeto de cada test se registra en el propio test: uno cualquiera
+        # alcanza para que la interface sea valida, y el que necesita una
+        # respuesta real registra un adaptador.
+        self.holder = None
+
+    def _register_object(self, obj, flags):
+        if not self.bus.registerObject(OBJECT_PATH, obj, flags):
+            self.skipTest("no se pudo registrar el objeto de prueba")
+        self.holder = obj
 
     def tearDown(self):
         if getattr(self, "holder", None) is not None:
             self.bus.unregisterObject(OBJECT_PATH)
             self.holder = None
         if getattr(self, "owned_service", False):
-            self.bus.unregisterService(SERVICE_NAME)
+            self.bus.unregisterService(self.service_name)
+
+    def _spin(self, app, predicate, timeout_ms=3000, step_ms=20):
+        from PySide6.QtCore import QEventLoop, QTimer
+
+        loop = QEventLoop()
+        deadline = QTimer()
+        deadline.setSingleShot(True)
+        deadline.timeout.connect(loop.quit)
+        deadline.start(timeout_ms)
+        poll = QTimer()
+        poll.timeout.connect(lambda: loop.quit() if predicate() else None)
+        poll.start(step_ms)
+        loop.exec()
 
     def test_async_call_defers_the_reply_instead_of_blocking(self):
         from time import monotonic
 
-        from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+        from PySide6.QtCore import QCoreApplication
 
         from src.textpik_core.placement_client import QtDBusPlacementTransport
 
+        from PySide6.QtCore import QObject
+        from PySide6.QtDBus import QDBusConnection
+
         app = QCoreApplication.instance() or QCoreApplication([])
-        transport = QtDBusPlacementTransport(timeout_ms=200)
+        self._register_object(QObject(), QDBusConnection.ExportAllSlots)
+        transport = QtDBusPlacementTransport(
+            timeout_ms=200, service_name=self.service_name
+        )
         delivered = []
 
         started = monotonic()
@@ -225,18 +254,70 @@ class QtDBusAsyncTransportTest(unittest.TestCase):
             "el callback llego sin ceder el event loop: la llamada fue sincrona",
         )
 
-        loop = QEventLoop()
-        deadline = QTimer()
-        deadline.setSingleShot(True)
-        deadline.timeout.connect(loop.quit)
-        deadline.start(2000)
-        poll = QTimer()
-        poll.timeout.connect(lambda: loop.quit() if delivered else None)
-        poll.start(20)
-        loop.exec()
-
+        self._spin(app, lambda: bool(delivered))
         self.assertTrue(delivered, "el callback asincrono nunca llego")
         self.assertIsInstance(delivered[0], bool)
+        self.assertIsNotNone(app)
+
+    def test_async_request_succeeds_against_a_real_service(self):
+        """A successful reply is the point; "the callback fired" is not enough.
+
+        The first version of the asynchronous transport called
+        ``QDBusInterface.asyncCall(method, *args)``, which PySide6 rejects with
+        TypeError because it only accepts one argument. Every asynchronous
+        placement failed while a test that only asserted "the callback ran"
+        stayed green.
+        """
+        from PySide6.QtCore import ClassInfo, QCoreApplication, QObject, Slot
+        from PySide6.QtDBus import QDBusAbstractAdaptor, QDBusConnection
+
+        from src.textpik_core.placement_client import (
+            KWinPlacementClient,
+            QtDBusPlacementTransport,
+        )
+
+        app = QCoreApplication.instance() or QCoreApplication([])
+        calls = []
+
+        @ClassInfo({"D-Bus Interface": INTERFACE_NAME})
+        class PlacementAdaptor(QDBusAbstractAdaptor):
+            @Slot(int, int, int, int, int)
+            def requestPlacement(self, revision, x, y, width, height):
+                calls.append((revision, x, y, width, height))
+
+            @Slot(result=str)
+            def readback(self):
+                return "9,1,1685,1020,116,33,DP-2"
+
+        parent = QObject()
+        adaptor = PlacementAdaptor(parent)  # noqa: F841 - debe seguir vivo
+        self._register_object(parent, QDBusConnection.ExportAdaptors)
+
+        transport = QtDBusPlacementTransport(
+            timeout_ms=2000, service_name=self.service_name
+        )
+        result = []
+        transport.call_async(
+            "requestPlacement", 21, 120, 130, 116, 33,
+            on_done=lambda ok, args: result.append(ok),
+        )
+        self._spin(app, lambda: bool(result))
+
+        self.assertEqual(result, [True], f"la llamada fallo: {transport.error!r}")
+        self.assertEqual(calls, [(21, 120, 130, 116, 33)])
+        self.assertEqual(transport.error, "")
+
+        # Una lectura real cubre ademas la rama de exito del parseo.
+        client = KWinPlacementClient(transport)
+        confirmations = []
+        client.readback_async(9, on_done=confirmations.append)
+        self._spin(app, lambda: bool(confirmations))
+
+        self.assertEqual(len(confirmations), 1)
+        self.assertIsNotNone(confirmations[0])
+        self.assertEqual(confirmations[0].position.as_tuple(), (1685, 1020))
+        self.assertEqual(confirmations[0].size, (116, 33))
+        self.assertEqual(confirmations[0].output, "DP-2")
         self.assertIsNotNone(app)
 
 
