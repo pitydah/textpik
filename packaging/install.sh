@@ -11,7 +11,10 @@ AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 KWIN_SCRIPT_SOURCE="$APP_DIR/kwin/textpik-cursor-bridge"
 KWIN_SCRIPT_DEST="$HOME/.local/share/kwin/scripts/textpik-cursor-bridge"
 KWIN_EFFECT_SOURCE="$PROJECT_DIR/native/kwin-effect"
-KWIN_EFFECT_DEST="$HOME/.local/lib/qt6/plugins/kwin/effects"
+# El subnivel "plugins" es obligatorio: KWin busca los efectos nativos en
+# <qt-plugins>/kwin/effects/plugins/, no directamente en kwin/effects/. Un .so
+# colocado un nivel mas arriba nunca se descubre.
+KWIN_EFFECT_DEST="$HOME/.local/lib/qt6/plugins/kwin/effects/plugins"
 QT_PLUGIN_PATH_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/90-textpik-qt-plugin-path.conf"
 
 MISSING=()

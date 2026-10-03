@@ -111,8 +111,18 @@ KWin development headers. The effect compiles as C++20 because KWin 6.7's
 
 ## Loading the effect
 
-KWin discovers native effects by scanning Qt plugin directories at startup, and
-it does not add any user plugin path of its own. Qt only looks in
+KWin discovers native effects through `KPluginMetaData::findPlugins()`, which
+looks for the **`kwin/effects/plugins`** subtree inside every Qt plugin
+directory. The extra `plugins` level is required: a `.so` placed directly in
+`kwin/effects/` is never found, and KWin reports nothing at all, so the popup
+silently falls back to the toolkit and lands where the compositor wants it.
+Verify the layout before blaming anything else:
+
+```
+~/.local/lib/qt6/plugins/kwin/effects/plugins/textpik-placement.so
+```
+
+KWin does not add any user plugin path of its own. Qt only looks in
 `/usr/lib/qt6/plugins`, so the user-local install directory has to be exported:
 
 ```
