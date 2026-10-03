@@ -10,6 +10,7 @@ import unittest
 from src.textpik_core.models import (
     PlacementBackend,
     PlacementOutcome,
+    PlacementReason,
     Point,
     PopupPlacementResult,
     Rect,
@@ -174,6 +175,116 @@ class PlacementResultTest(unittest.TestCase):
         self.assertTrue(result.verified)
         self.assertEqual(result.desired.as_tuple(), (1900, 1000))
         self.assertEqual(result.constrained.as_tuple(), (1580, 900))
+
+
+class CursorProximityTest(unittest.TestCase):
+    """``verified`` proves the move, not that the move aimed at the cursor."""
+
+    def _centred_at_960_540_with_cursor_at_1559_668(self):
+        # The exact shape of the field failure: KWin moved the window where it
+        # was asked, but it was asked for the centre of the screen.
+        return PopupPlacementResult(
+            backend=PlacementBackend.KWIN_EFFECT,
+            desired=Point(960, 540),
+            requested=Point(960, 540),
+            observed=Point(960, 540),
+            requested_size=(413, 35),
+            observed_size=(413, 35),
+            cursor=Point(1559, 668),
+        )
+
+    def test_a_verified_placement_far_from_the_cursor_is_not_proximity_verified(
+        self,
+    ):
+        result = self._centred_at_960_540_with_cursor_at_1559_668()
+        self.assertTrue(result.verified, "el compositor si movio la ventana")
+        self.assertFalse(
+            result.cursor_proximity_verified,
+            "un popup en el centro no esta junto al cursor",
+        )
+        self.assertGreater(result.cursor_edge_distance(), 32)
+
+    def test_a_popup_beside_the_cursor_is_proximity_verified(self):
+        result = PopupPlacementResult(
+            backend=PlacementBackend.KWIN_EFFECT,
+            desired=Point(1565, 674),
+            requested=Point(1565, 674),
+            observed=Point(1565, 674),
+            requested_size=(116, 33),
+            observed_size=(116, 33),
+            cursor=Point(1559, 668),
+        )
+        self.assertTrue(result.verified)
+        self.assertTrue(result.cursor_proximity_verified)
+
+    def test_distance_is_measured_to_the_border_not_the_centre(self):
+        # Cursor just left of a wide bar: touching its left edge is correct
+        # placement even though the centre is 200px away.
+        result = PopupPlacementResult(
+            backend=PlacementBackend.KWIN_EFFECT,
+            desired=Point(1006, 460),
+            requested=Point(1006, 460),
+            observed=Point(1006, 460),
+            requested_size=(400, 33),
+            observed_size=(400, 33),
+            cursor=Point(1000, 470),
+        )
+        self.assertEqual(result.cursor_edge_distance(), 6)
+        self.assertTrue(result.cursor_proximity_verified)
+
+    def test_cursor_inside_the_popup_projection_has_zero_distance(self):
+        result = PopupPlacementResult(
+            backend=PlacementBackend.KWIN_EFFECT,
+            desired=Point(900, 460),
+            requested=Point(900, 460),
+            observed=Point(900, 460),
+            requested_size=(400, 33),
+            observed_size=(400, 33),
+            cursor=Point(1000, 470),
+        )
+        self.assertEqual(result.cursor_edge_distance(), 0)
+
+    def test_without_cursor_evidence_proximity_is_never_claimed(self):
+        result = PopupPlacementResult(
+            backend=PlacementBackend.KWIN_EFFECT,
+            desired=Point(10, 10),
+            requested=Point(10, 10),
+            observed=Point(10, 10),
+            requested_size=(116, 33),
+            observed_size=(116, 33),
+        )
+        self.assertIsNone(result.cursor_edge_distance())
+        self.assertFalse(result.cursor_proximity_verified)
+
+    def test_a_non_authoritative_backend_never_claims_proximity(self):
+        result = PopupPlacementResult(
+            backend=PlacementBackend.QT_XDG_TOPLEVEL_UNVERIFIED,
+            desired=Point(10, 10),
+            requested=Point(10, 10),
+            cursor=Point(10, 10),
+        )
+        self.assertFalse(result.cursor_proximity_verified)
+
+    def test_result_records_the_selection_generation_and_reason(self):
+        result = PopupPlacementResult(
+            backend=PlacementBackend.KWIN_EFFECT,
+            desired=Point(1565, 674),
+            requested=Point(1565, 674),
+            observed=Point(1565, 674),
+            requested_size=(116, 33),
+            observed_size=(116, 33),
+            cursor=Point(1559, 668),
+            cursor_age_ms=8.0,
+            anchor_source="kwin",
+            selection_generation=142,
+            reason=PlacementReason.CURSOR_LOCAL,
+        )
+        payload = result.as_dict()
+        self.assertEqual(payload["selection_generation"], 142)
+        self.assertEqual(payload["anchor_source"], "kwin")
+        self.assertEqual(payload["cursor_age_ms"], 8.0)
+        self.assertEqual(payload["reason"], "cursor-local")
+        self.assertTrue(payload["cursor_proximity_verified"])
 
 
 class GeometryTypeTest(unittest.TestCase):

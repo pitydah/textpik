@@ -308,5 +308,45 @@ class PopupPlacementTest(unittest.TestCase):
         popup.hide()
 
 
+class CursorBridgeStateTest(unittest.TestCase):
+    """An open endpoint is not cursor evidence; a recent sample is."""
+
+    def setUp(self):
+        import src.textpik as textpik
+
+        self.textpik = textpik
+        self.previous = textpik.kwin_bridge_cursor
+
+    def tearDown(self):
+        self.textpik.kwin_bridge_cursor = self.previous
+
+    def test_no_samples_is_unavailable_even_with_the_endpoint(self):
+        self.textpik.kwin_bridge_cursor = None
+        state = self.textpik.cursor_bridge_state(endpoint_registered=True)
+        self.assertTrue(state["endpoint_registered"])
+        self.assertFalse(state["samples_received"])
+        self.assertEqual(state["authority"], "unavailable")
+
+    def test_a_recent_sample_is_verified(self):
+        self.textpik.kwin_bridge_cursor = (10, 20, time.monotonic())
+        state = self.textpik.cursor_bridge_state(endpoint_registered=True)
+        self.assertTrue(state["samples_received"])
+        self.assertEqual(state["authority"], "verified")
+        self.assertEqual(state["position"], (10, 20))
+        self.assertLess(state["last_sample_age_ms"], 100)
+
+    def test_an_old_sample_is_stale_and_not_authority(self):
+        self.textpik.kwin_bridge_cursor = (10, 20, time.monotonic() - 10.0)
+        state = self.textpik.cursor_bridge_state(endpoint_registered=True)
+        self.assertTrue(state["samples_received"])
+        self.assertEqual(state["authority"], "stale")
+        self.assertGreater(state["last_sample_age_ms"], 5000)
+
+    def test_samples_without_an_endpoint_are_not_authority(self):
+        self.textpik.kwin_bridge_cursor = (10, 20, time.monotonic())
+        state = self.textpik.cursor_bridge_state(endpoint_registered=False)
+        self.assertEqual(state["authority"], "unavailable")
+
+
 if __name__ == "__main__":
     unittest.main()

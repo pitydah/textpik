@@ -54,6 +54,7 @@ def build_wayland_profile(
     platform_name: str,
     desktop: str,
     kwin_cursor_bridge: bool = False,
+    kwin_cursor_samples: bool = False,
     kwin_activation_bridge: bool = False,
     kwin_placement_effect: bool = False,
 ) -> WaylandCapabilityProfile:
@@ -77,9 +78,12 @@ def build_wayland_profile(
         return WaylandCapabilityProfile(
             session="wayland",
             desktop=family,
+            # Registering the endpoint only proves TextPik is listening. A
+            # verified position needs the KWin script to have actually sent a
+            # recent sample, otherwise the claim is about an open socket.
             pointer_position=(
                 CapabilityTruth.VERIFIED
-                if kwin_cursor_bridge
+                if (kwin_cursor_bridge and kwin_cursor_samples)
                 else CapabilityTruth.DEGRADED
             ),
             global_pointer_buttons=CapabilityTruth.UNAVAILABLE,

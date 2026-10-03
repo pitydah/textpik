@@ -69,6 +69,16 @@ class PlacementOutcome(str, Enum):
     BACKEND_UNAVAILABLE = "backend-unavailable"
 
 
+class PlacementReason(str, Enum):
+    """Why the popup ended up where it did."""
+
+    CURSOR_LOCAL = "cursor-local"
+    EDGE_FLIP = "edge-flip"
+    SELECTION_AVOID = "selection-avoid"
+    WORKAREA_CLAMP = "workarea-clamp"
+    FALLBACK = "fallback"
+
+
 @dataclass(frozen=True, slots=True)
 class PopupPlacementResult:
     """The outcome of one placement request.
@@ -78,6 +88,12 @@ class PopupPlacementResult:
     reported back.  ``verified`` is only ever true when an authoritative backend
     confirmed the request, the revision is still active, and the observed
     geometry is within tolerance.
+
+    ``verified`` alone proves the compositor moved the window where TextPik
+    asked.  It says nothing about whether TextPik asked for the right place, so
+    ``cursor_proximity`` records how far the observed popup ended up from the
+    cursor that this selection used.  A placement can be verified and still be
+    nowhere near the cursor when the anchor was stale.
     """
 
     backend: PlacementBackend
@@ -92,6 +108,13 @@ class PopupPlacementResult:
     active_revision: int | None = None
     tolerance: int = 2
     error: str | None = None
+    # Cursor evidence for this selection, if any.
+    cursor: Point | None = None
+    cursor_age_ms: float | None = None
+    anchor_source: str = ""
+    selection_generation: int | None = None
+    reason: PlacementReason | None = None
+    cursor_proximity_threshold: int = 32
 
     def __post_init__(self) -> None:
         # A non-authoritative backend can never publish an observed position:
@@ -170,6 +193,47 @@ class PopupPlacementResult:
             return False
         return True
 
+    def cursor_edge_distance(self) -> int | None:
+        """Manhattan distance from the cursor to the popup's nearest border.
+
+        Measuring to the border, not to the centre, is what "next to the
+        cursor" means: a wide popup whose left edge touches the cursor is a
+        correct placement even though its centre is far away.  The distance is
+        zero on an axis when the cursor falls inside the popup's projection on
+        that axis.
+        """
+        if self.cursor is None or self.observed is None or self.observed_size is None:
+            return None
+        cx, cy = self.cursor.as_tuple()
+        x, y = self.observed.as_tuple()
+        width, height = self.observed_size
+        if cx < x:
+            dx = x - cx
+        elif cx >= x + width:
+            dx = cx - (x + width - 1)
+        else:
+            dx = 0
+        if cy < y:
+            dy = y - cy
+        elif cy >= y + height:
+            dy = cy - (y + height - 1)
+        else:
+            dy = 0
+        return dx + dy
+
+    @property
+    def cursor_proximity_verified(self) -> bool:
+        """Whether the popup really ended up next to the cursor it aimed at.
+
+        Independent from ``verified``: the compositor can confirm a placement
+        that TextPik computed from a stale cursor, and that must not read as a
+        success for the product contract.
+        """
+        distance = self.cursor_edge_distance()
+        if distance is None:
+            return False
+        return distance <= self.cursor_proximity_threshold
+
     @property
     def outcome(self) -> PlacementOutcome:
         if self.verified:
@@ -209,6 +273,13 @@ class PopupPlacementResult:
             "active_revision": self.active_revision,
             "tolerance": self.tolerance,
             "verified": self.verified,
+            "cursor_proximity_verified": self.cursor_proximity_verified,
+            "cursor_edge_distance": self.cursor_edge_distance(),
+            "cursor": self.cursor.as_tuple() if self.cursor else None,
+            "cursor_age_ms": self.cursor_age_ms,
+            "anchor_source": self.anchor_source,
+            "selection_generation": self.selection_generation,
+            "reason": self.reason.value if self.reason else None,
             "outcome": self.outcome.value,
             "error": self.error,
         }

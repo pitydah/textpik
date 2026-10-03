@@ -71,7 +71,9 @@ if (existingWindows && existingWindows.forEach) {
     existingWindows.forEach(keepTextPikOutOfTaskManager);
 }
 sendCursorPos();
-if (typeof setInterval === "function") {
-    setInterval(sendCursorPos, 1000);
-}
+// There is deliberately no heartbeat timer: KWin 6.7's script engine provides
+// neither a repeating setInterval nor a setTimeout, so a periodic refresh would
+// be dead code that only looks like it keeps the cursor fresh. Updates are
+// event-driven through cursorPosChanged, which does fire on every pointer
+// movement and is what makes the sample accurate at selection time.
 print("TextPik cursor/activation bridge loaded");

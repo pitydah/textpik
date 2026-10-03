@@ -431,6 +431,7 @@ class WaylandTruthV14Test(unittest.TestCase):
             platform_name="wayland",
             desktop="KDE",
             kwin_cursor_bridge=True,
+            kwin_cursor_samples=True,
             kwin_activation_bridge=True,
         )
         self.assertEqual(profile.pointer_position, CapabilityTruth.VERIFIED)
@@ -443,6 +444,30 @@ class WaylandTruthV14Test(unittest.TestCase):
             profile.positioning_backend, "qt-xdg-toplevel-unverified"
         )
         self.assertEqual(profile.popup_parity, "degraded-wayland")
+
+    def test_registered_endpoint_without_samples_is_not_verified(self):
+        """An open socket is not cursor evidence.
+
+        The bridge endpoint existing only proves TextPik is listening. Claiming
+        a verified pointer position without a sample from the KWin script is how
+        the popup ended up anchored to a position nobody had observed.
+        """
+        profile = build_wayland_profile(
+            platform_name="wayland",
+            desktop="KDE",
+            kwin_cursor_bridge=True,
+            kwin_cursor_samples=False,
+        )
+        self.assertEqual(profile.pointer_position, CapabilityTruth.DEGRADED)
+
+    def test_no_bridge_at_all_is_degraded(self):
+        profile = build_wayland_profile(
+            platform_name="wayland",
+            desktop="KDE",
+            kwin_cursor_bridge=False,
+            kwin_cursor_samples=False,
+        )
+        self.assertEqual(profile.pointer_position, CapabilityTruth.DEGRADED)
 
     def test_plasma_placement_effect_upgrades_positioning_truth(self):
         profile = build_wayland_profile(

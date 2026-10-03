@@ -17,6 +17,7 @@ import textwrap
 import ctypes
 import time
 import tempfile
+from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -48,6 +49,7 @@ try:
     from textpik_core.models import (
         AnchorSource,
         PlacementBackend,
+        PlacementReason,
         Point,
         PopupAnchor,
         PopupPlacementResult,
@@ -157,6 +159,7 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
     from .textpik_core.models import (
         AnchorSource,
         PlacementBackend,
+        PlacementReason,
         Point,
         PopupAnchor,
         PopupPlacementResult,
@@ -396,16 +399,69 @@ APP_VERSION = "0.5.0-rc.1"
 # The placement authority can appear or disappear mid-session (the KWin effect
 # is loaded by the compositor, not by TextPik), so the answer is re-probed at
 # this interval instead of being decided once at startup.
+def cursor_bridge_state(endpoint_registered, max_age_seconds=None):
+    """Describe what the KWin cursor bridge has actually delivered.
+
+    A registered endpoint only proves TextPik is listening. Claiming a verified
+    pointer position needs a recent sample from the KWin script: an open socket
+    with no traffic is exactly the state where the popup is anchored to a stale
+    or invented position.
+    """
+    if max_age_seconds is None:
+        max_age_seconds = CURSOR_BRIDGE_MAX_AGE_SECONDS
+    state = {
+        "endpoint_registered": bool(endpoint_registered),
+        "samples_received": False,
+        "last_sample_age_ms": None,
+        "position": None,
+        "authority": "unavailable",
+    }
+    if kwin_bridge_cursor is None:
+        return state
+    x, y, sampled_at = kwin_bridge_cursor
+    age_ms = max(0.0, (time.monotonic() - sampled_at) * 1000.0)
+    state.update(
+        samples_received=True,
+        last_sample_age_ms=round(age_ms, 1),
+        position=(int(x), int(y)),
+        authority=(
+            "verified" if age_ms <= max_age_seconds * 1000.0 else "stale"
+        ),
+    )
+    if not state["endpoint_registered"]:
+        state["authority"] = "unavailable"
+    return state
+
+
+@dataclass(frozen=True)
+class PlacementEvidence:
+    """Cursor evidence a placement belongs to.
+
+    Carried through the asynchronous flow so the recorded result can say not
+    only where the compositor put the popup but how close it landed to the
+    cursor this selection actually aimed at, and which gesture asked for it.
+    """
+
+    cursor: Point | None = None
+    cursor_age_ms: float | None = None
+    anchor_source: str = ""
+    selection_generation: int | None = None
+    reason: PlacementReason | None = None
+
+
 PLACEMENT_PROBE_TTL = 2.0
 # A freshly shown Wayland surface reaches the compositor a moment after show(),
 # so an unconfirmed placement is retried a few times before giving up.
-PLACEMENT_CONFIRM_ATTEMPTS = 8
+# Reintentos de la escalera. Un move pedido mientras la superficie se esta
+# mapeando puede perderse, y un salto grande tarda mas en asentarse: con
+# 20 x 20 ms la ventana cubre ~400 ms, por debajo del deadline de revelado.
+PLACEMENT_CONFIRM_ATTEMPTS = 20
 PLACEMENT_CONFIRM_INTERVAL_MS = 20
 # The placement calls no longer block, so the D-Bus timeout alone no longer
 # bounds the worst case: a reply that never arrives would leave the popup
 # cloaked. This is the hard deadline after which the popup is revealed
 # degraded, whatever the compositor is doing.
-PLACEMENT_REVEAL_DEADLINE_MS = 450
+PLACEMENT_REVEAL_DEADLINE_MS = 600
 
 GITHUB_PROFILE_URL = "https://github.com/pitydah"
 GITHUB_SPONSORS_URL = "https://github.com/sponsors/pitydah"
@@ -2720,9 +2776,10 @@ class PopupWindow(QWidget):
         )
         pending = self._placement_pending
         if pending is not None and self._placement_request_is_current(pending[4]):
-            desired, requested, width, height, revision = pending
+            desired, requested, width, height, revision, evidence = pending
             self._store_placement_result(
-                desired, requested, width, height, revision, None, "effect-timeout"
+                desired, requested, width, height, revision, None, "effect-timeout",
+                evidence,
             )
             return
         self._set_placement_revealed(True)
@@ -2832,7 +2889,7 @@ class PopupWindow(QWidget):
             button.style().unpolish(button)
             button.style().polish(button)
 
-    def show_at_cursor(self, anchor=None, avoid_rect=None):
+    def show_at_cursor(self, anchor=None, avoid_rect=None, generation=None):
         if anchor is not None:
             cx, cy, cursor_reliable = anchor.x, anchor.y, anchor.confidence >= 0.65
         else:
@@ -2956,10 +3013,45 @@ class PopupWindow(QWidget):
                 requested_point,
                 width,
                 height,
+                evidence=self._placement_evidence(anchor, generation, desired_point,
+                                                  requested_point),
                 choice=choice,
             )
         else:
             self._set_placement_revealed(True)
+
+    @staticmethod
+    def _placement_reason(desired, requested):
+        """Classify why the popup is not exactly where the anchor asked.
+
+        The anchor resolver places the popup beside the cursor; anything else is
+        the screen edge or the workarea having its say.  Comparing the axes is
+        enough to tell those apart without guessing intent.
+        """
+        if desired == requested:
+            return PlacementReason.CURSOR_LOCAL
+        if requested.y == desired.y:
+            return PlacementReason.EDGE_FLIP
+        return PlacementReason.WORKAREA_CLAMP
+
+    def _placement_evidence(self, anchor, generation, desired, requested):
+        """Snapshot the cursor evidence this placement belongs to."""
+        cursor = None
+        age_ms = None
+        source = ""
+        if anchor is not None:
+            cursor = Point(int(anchor.x), int(anchor.y))
+            source = anchor.source.value
+            created = getattr(anchor, "created_at", None)
+            if created:
+                age_ms = max(0.0, (time.monotonic() - created) * 1000.0)
+        return PlacementEvidence(
+            cursor=cursor,
+            cursor_age_ms=age_ms,
+            anchor_source=source,
+            selection_generation=generation,
+            reason=self._placement_reason(desired, requested),
+        )
 
     def _placement_backend_choice(self):
         """Resolve, with a short cache, who is allowed to place the popup."""
@@ -2985,7 +3077,9 @@ class PopupWindow(QWidget):
         self._placement_probed_at = now
         return self._placement_choice
 
-    def _report_placement(self, desired, requested, width, height, *, choice=None):
+    def _report_placement(
+        self, desired, requested, width, height, *, choice=None, evidence=None
+    ):
         """Record where the popup was asked to go and who may confirm it.
 
         On Wayland the toolkit cannot place a toplevel, so the local position is
@@ -2994,8 +3088,9 @@ class PopupWindow(QWidget):
         """
         choice = choice or self._placement_backend_choice()
 
+        evidence = evidence or PlacementEvidence()
         if choice.backend == PlacementBackend.KWIN_EFFECT:
-            self._start_kwin_placement(desired, requested, width, height)
+            self._start_kwin_placement(desired, requested, width, height, evidence)
             return
 
         observed = None
@@ -3012,6 +3107,11 @@ class PopupWindow(QWidget):
             observed=observed,
             requested_size=(width, height),
             observed_size=observed_size,
+            cursor=evidence.cursor,
+            cursor_age_ms=evidence.cursor_age_ms,
+            anchor_source=evidence.anchor_source,
+            selection_generation=evidence.selection_generation,
+            reason=evidence.reason,
         )
         self.last_placement_result = result
         self._set_placement_revealed(True)
@@ -3024,7 +3124,7 @@ class PopupWindow(QWidget):
             observed.as_tuple() if observed else None,
         )
 
-    def _start_kwin_placement(self, desired, requested, width, height):
+    def _start_kwin_placement(self, desired, requested, width, height, evidence=None):
         """Ask the compositor to place the popup, without blocking the interface.
 
         Every step runs on the event loop so a stalled compositor cannot freeze
@@ -3033,7 +3133,10 @@ class PopupWindow(QWidget):
         """
         revision = self._placement_lease.begin()
         self._placement_attempt = 0
-        self._placement_pending = (desired, requested, width, height, revision)
+        evidence = evidence or PlacementEvidence()
+        self._placement_pending = (
+            desired, requested, width, height, revision, evidence,
+        )
         client = self._placement_client
         if client is None:
             self._store_placement_result(
@@ -3047,37 +3150,44 @@ class PopupWindow(QWidget):
             width,
             height,
             on_done=lambda ok: self._on_placement_requested(
-                revision, ok, desired, requested, width, height
+                revision, ok, desired, requested, width, height, evidence
             ),
         )
 
-    def _on_placement_requested(self, revision, ok, desired, requested, width, height):
+    def _on_placement_requested(
+        self, revision, ok, desired, requested, width, height, evidence=None
+    ):
         if not self._placement_request_is_current(revision):
             return
         if not ok:
             self._store_placement_result(
-                desired, requested, width, height, revision, None, "effect-unreachable"
+                desired, requested, width, height, revision, None,
+                "effect-unreachable", evidence,
             )
             logger.warning(
                 "Popup placement: el efecto KWin no acepto la solicitud (revision=%s)",
                 revision,
             )
             return
-        self._read_placement_confirmation(revision, desired, requested, width, height)
+        self._read_placement_confirmation(
+            revision, desired, requested, width, height, evidence
+        )
 
-    def _read_placement_confirmation(self, revision, desired, requested, width, height):
+    def _read_placement_confirmation(
+        self, revision, desired, requested, width, height, evidence=None
+    ):
         client = self._placement_client
         if client is None or not self._placement_request_is_current(revision):
             return
         client.readback_async(
             revision,
             on_done=lambda confirmation: self._on_placement_readback(
-                revision, confirmation, desired, requested, width, height
+                revision, confirmation, desired, requested, width, height, evidence
             ),
         )
 
     def _on_placement_readback(
-        self, revision, confirmation, desired, requested, width, height
+        self, revision, confirmation, desired, requested, width, height, evidence=None
     ):
         """Retry while the compositor settles, then report whatever it showed.
 
@@ -3094,10 +3204,14 @@ class PopupWindow(QWidget):
             and self._placement_attempt < PLACEMENT_CONFIRM_ATTEMPTS - 1
         ):
             self._placement_attempt += 1
+            # Re-issue the request instead of only re-reading: a move issued
+            # while the surface is still being mapped can be dropped, and then
+            # every readback keeps reporting the old position until the ladder
+            # gives up and the popup stays in the wrong place.
             QTimer.singleShot(
                 PLACEMENT_CONFIRM_INTERVAL_MS,
-                lambda: self._read_placement_confirmation(
-                    revision, desired, requested, width, height
+                lambda: self._retry_placement_request(
+                    revision, desired, requested, width, height, evidence
                 ),
             )
             return
@@ -3112,6 +3226,25 @@ class PopupWindow(QWidget):
             revision,
             confirmation,
             None if confirmation is not None else "effect-timeout",
+            evidence,
+        )
+
+    def _retry_placement_request(
+        self, revision, desired, requested, width, height, evidence
+    ):
+        """Re-apply the target before reading it back again."""
+        client = self._placement_client
+        if client is None or not self._placement_request_is_current(revision):
+            return
+        client.request_async(
+            revision,
+            requested.x,
+            requested.y,
+            width,
+            height,
+            on_done=lambda ok: self._on_placement_requested(
+                revision, ok, desired, requested, width, height, evidence
+            ),
         )
 
     def _placement_request_is_current(self, revision):
@@ -3130,7 +3263,8 @@ class PopupWindow(QWidget):
         )
 
     def _store_placement_result(
-        self, desired, requested, width, height, revision, confirmation, error
+        self, desired, requested, width, height, revision, confirmation, error,
+        evidence=None,
     ):
         accepted = bool(confirmation) and self._placement_lease.accept(revision)
         result = PopupPlacementResult(
@@ -3144,6 +3278,11 @@ class PopupWindow(QWidget):
             revision=revision,
             active_revision=self._placement_lease.active_revision,
             error=error,
+            cursor=evidence.cursor if evidence else None,
+            cursor_age_ms=evidence.cursor_age_ms if evidence else None,
+            anchor_source=evidence.anchor_source if evidence else "",
+            selection_generation=evidence.selection_generation if evidence else None,
+            reason=evidence.reason if evidence else None,
         )
         self.last_placement_result = result
         self._placement_pending = None
@@ -6883,7 +7022,9 @@ class TextPikApp(QObject):
             if not self._selection_session_is_current(session_id):
                 return
             self.popup.set_keyboard_mode(force)
-            self.popup.show_at_cursor(anchor, self.selection_context.selection_rect)
+            self.popup.show_at_cursor(
+                anchor, self.selection_context.selection_rect, session_id
+            )
             self.popup_state.visible()
             self.performance.observe("popup-hot-path", hot_path_started)
             self._animate_popup_fade_in()
@@ -8256,12 +8397,16 @@ exec bash -i
         """Return a privacy-safe capability snapshot for support requests."""
         services = self._desktop_dbus_services()
         monitor_name = type(self.monitor).__name__
+        cursor_bridge = cursor_bridge_state(
+            endpoint_registered=bool(
+                is_qt_wayland() and getattr(self, "cursor_bridge", None)
+            )
+        )
         wayland_profile = build_wayland_profile(
             platform_name=self.app.platformName(),
             desktop=desktop_environment(),
-            kwin_cursor_bridge=bool(
-                is_qt_wayland() and getattr(self, "cursor_bridge", None)
-            ),
+            kwin_cursor_bridge=cursor_bridge["endpoint_registered"],
+            kwin_cursor_samples=cursor_bridge["authority"] == "verified",
             kwin_activation_bridge=bool(
                 is_qt_wayland() and getattr(self, "cursor_bridge", None)
             ),
@@ -8298,6 +8443,9 @@ exec bash -i
             "xdg_desktop_portal": "org.freedesktop.portal.Desktop" in services,
             "secret_service": "org.freedesktop.secrets" in services,
             "anchor_provider": getattr(self, "_last_anchor_decision", "unknown"),
+            # Separate from the endpoint flag inside the profile: this says
+            # whether the KWin script is actually sending cursor samples.
+            "cursor_bridge": cursor_bridge,
             "wayland_capabilities": wayland_profile.as_dict(),
             "popup_placement": (
                 placement_result.as_dict()
