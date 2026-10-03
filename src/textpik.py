@@ -85,7 +85,11 @@ try:
         plan_actions,
     )
     from textpik_core.profiles import resolve_profile
-    from textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
+    from textpik_core.selection import (
+        SelectionMimeEvidence,
+        adaptive_selection_delay,
+        evaluate_selection_intent,
+    )
     from textpik_core.interaction import (
         modifier_key,
         plan_popup_composition,
@@ -197,7 +201,11 @@ except ModuleNotFoundError:  # Imported as src.textpik from a source checkout.
         plan_actions,
     )
     from .textpik_core.profiles import resolve_profile
-    from .textpik_core.selection import adaptive_selection_delay, evaluate_selection_intent
+    from .textpik_core.selection import (
+        SelectionMimeEvidence,
+        adaptive_selection_delay,
+        evaluate_selection_intent,
+    )
     from .textpik_core.interaction import (
         modifier_key,
         plan_popup_composition,
@@ -1491,6 +1499,15 @@ class BaseSelectionMonitor(QObject):
     def get_last_text(self):
         return self._last_text
 
+    def selection_mime_evidence(self):
+        """MIME flavours of the current selection, or None when unknown.
+
+        Default is no evidence: a monitor that cannot describe the selection
+        must not let the classifier guess, and the role-based rules stay in
+        charge. Monitors that can read the clipboard override this.
+        """
+        return None
+
     def pause(self):
         self._active = False
         self._next_revision()
@@ -1513,6 +1530,27 @@ class X11SelectionMonitor(BaseSelectionMonitor):
                 "Qt informa que PRIMARY selection no esta disponible en esta sesion.",
             )
 
+    def selection_mime_evidence(self):
+        """MIME flavours of the current selection, or None when unknown.
+
+        The string cannot say whether the user highlighted a file or text that
+        looks like a path; the clipboard can, and it says it at read time.
+        """
+        try:
+            mime = self.clipboard.mimeData(QClipboard.Mode.Selection)
+        except Exception:
+            return None
+        if mime is None:
+            return None
+        formats = tuple(str(f) for f in mime.formats())
+        if not formats:
+            return None
+        return SelectionMimeEvidence(
+            has_text=bool(mime.hasText()),
+            has_urls=bool(mime.hasUrls()),
+            formats=formats,
+        )
+
     def _read_selection_text(self):
         return self.clipboard.text(QClipboard.Mode.Selection)
 
@@ -1530,6 +1568,11 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
         self._wl_restart_attempts = 0
         self.clipboard = QApplication.clipboard()
         self._use_wl_paste = check_command("wl-paste")
+        # Evidencia de la ultima lectura; pertenece a esa seleccion.
+        self._mime_evidence = None
+        self._wl_pending_text = None
+        self._wl_pending_types = None
+        self._wl_types_process = None
         if not self._use_wl_paste and self.clipboard.supportsSelection():
             self.clipboard.selectionChanged.connect(self._selection_event)
 
@@ -1693,9 +1736,17 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
         process.finished.connect(self._on_wl_read_finished)
         process.start("wl-paste", ["--primary", "--no-newline"])
 
+        # Los tipos MIME se piden en paralelo: son lo unico que distingue un
+        # archivo de un texto que parece una ruta, y preguntarlos despues
+        # agregaria latencia justo en el camino comun.
+        self._wl_types_pending = True
+        types_process = QProcess(self)
+        self._wl_types_process = types_process
+        types_process.finished.connect(self._on_wl_types_finished)
+        types_process.start("wl-paste", ["--primary", "--list-types"])
+
     def _on_wl_read_finished(self, exit_code, _exit_status):
         process, self._wl_read_process = self._wl_read_process, None
-        revision, self._wl_read_revision = self._wl_read_revision, 0
         if process is None:
             return
         text = ""
@@ -1709,6 +1760,50 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
             ).strip()
             logger.debug("wl-paste no pudo leer PRIMARY: %s", error)
         process.deleteLater()
+        self._wl_pending_text = text
+        self._finish_wl_read_when_ready()
+
+    def _on_wl_types_finished(self, exit_code, _exit_status):
+        process, self._wl_types_process = self._wl_types_process, None
+        if process is None:
+            return
+        formats: tuple[str, ...] = ()
+        if exit_code == 0:
+            raw = bytes(process.readAllStandardOutput()).decode(
+                "utf-8", errors="replace"
+            )
+            formats = tuple(
+                line.strip() for line in raw.splitlines() if line.strip()
+            )
+        process.deleteLater()
+        self._wl_pending_types = formats
+        self._finish_wl_read_when_ready()
+
+    def _finish_wl_read_when_ready(self):
+        """Accept only when both reads landed, so the evidence is this selection.
+
+        Accepting on the text alone would let the classification run against the
+        previous selection's flavours, which is exactly the race the generation
+        rules exist to prevent.
+        """
+        if self._wl_pending_text is None or self._wl_pending_types is None:
+            return
+        text, formats = self._wl_pending_text, self._wl_pending_types
+        self._wl_pending_text = self._wl_pending_types = None
+        revision, self._wl_read_revision = self._wl_read_revision, 0
+        self._mime_evidence = (
+            SelectionMimeEvidence(
+                has_text=any(
+                    fmt.casefold().startswith("text/plain") for fmt in formats
+                ),
+                has_urls=any(
+                    fmt.casefold() == "text/uri-list" for fmt in formats
+                ),
+                formats=formats,
+            )
+            if formats
+            else None
+        )
         if not self._active:
             return
         accepted = self._accept_selection_text(text, revision)
@@ -1716,6 +1811,11 @@ class WaylandSelectionMonitor(BaseSelectionMonitor):
             # An event arrived while wl-paste was still reading the previous
             # selection. Start one fresh read instead of showing stale text.
             self.timer_debounce.start(0)
+
+    def selection_mime_evidence(self):
+        if self._use_wl_paste:
+            return self._mime_evidence
+        return super().selection_mime_evidence()
 
     def _read_selection_text(self):
         if self._use_wl_paste:
@@ -6880,6 +6980,14 @@ class TextPikApp(QObject):
             logger.info("Popup omitido por filtro de aplicaciones")
             self._suppress_popup("application")
             return
+        # MIME evidence from the selection itself: the only source that tells a
+        # file object from text that looks like a path, and it is already
+        # captured by the read that produced this text.
+        mime = (
+            None
+            if force
+            else self.monitor.selection_mime_evidence()
+        )
         intent = evaluate_selection_intent(
             self.selection_context,
             text,
@@ -6890,11 +6998,13 @@ class TextPikApp(QObject):
                 not force
                 and self.settings.get("disable_in_sensitive_fields", True)
             ),
+            mime=mime,
         )
         if not intent.allowed:
             logger.info(
-                "Popup omitido por intención %s: app=%s role=%s",
+                "Popup omitido por intención %s (kind=%s): app=%s role=%s",
                 intent.reason,
+                intent.kind.value,
                 self.selection_context.application,
                 self.selection_context.role,
             )
