@@ -44,6 +44,20 @@ def is_kde_desktop(desktop: str) -> bool:
     return "kde" in value or "plasma" in value
 
 
+def desktop_family(desktop: str) -> str:
+    """Normalise a desktop environment string to a composer's family name."""
+    value = str(desktop or "").casefold()
+    if "plasma" in value or "kde" in value:
+        return "plasma"
+    if "gnome" in value:
+        return "gnome"
+    if "hyprland" in value:
+        return "hyprland"
+    if "sway" in value:
+        return "sway"
+    return value or "unknown"
+
+
 def command_exists(
     command: str,
     *,

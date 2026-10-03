@@ -124,10 +124,34 @@ def validate_stable_evidence(version: str) -> list[str]:
     if crash_free_cycles < 2:
         errors.append("stable promotion requires two crash-free RC cycles")
     matrix = evidence.get("manual_desktop_matrix", {})
-    required = ("kde_wayland", "kde_x11", "gnome_wayland", "gnome_x11")
+    required = (
+        "kde_wayland",
+        "kde_x11",
+        "gnome_wayland",
+        "gnome_x11",
+        "hyprland_or_sway_wayland",
+    )
     missing = [name for name in required if not matrix.get(name, False)]
     if missing:
         errors.append("stable desktop validation missing: " + ", ".join(missing))
+    distribution = evidence.get("distribution_matrix", {})
+    required_distributions = (
+        "debian_stable",
+        "ubuntu_lts",
+        "fedora",
+        "arch_clean_chroot",
+        "flatpak_wayland",
+        "flatpak_x11",
+        "appimage_clean_host",
+    )
+    missing_distributions = [
+        name for name in required_distributions if not distribution.get(name, False)
+    ]
+    if missing_distributions:
+        errors.append(
+            "stable distribution validation missing: "
+            + ", ".join(missing_distributions)
+        )
     if not evidence.get("accessibility_reviewed", False):
         errors.append("stable accessibility review is incomplete")
     if not evidence.get("translations_reviewed", False):

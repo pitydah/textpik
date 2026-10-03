@@ -37,3 +37,5 @@ Thumbs.db
 
 # textpik generated
 textpik.lock
+# Local AI runtime state
+.atl/

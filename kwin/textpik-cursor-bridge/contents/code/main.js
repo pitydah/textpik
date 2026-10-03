@@ -17,16 +17,15 @@ function sendCursorPos() {
     );
 }
 
-function onClientActivated(client) {
-    // Cuando el usuario activa otra ventana (clic fuera del popup),
-    // notificamos a TextPik para que cierre el popup.
-    // El popup de TextPik es override-redirect, no aparece como client.
-    if (client) {
+function onWindowActivated(window) {
+    // This signal proves a KWin activation change, not a raw global mouse
+    // click. TextPik keeps those two capabilities separate.
+    if (!window || !identifyTextPik(window)) {
         callDBus(
             service,
             path,
             iface,
-            "notifyClickOutside"
+            "notifyWindowActivated"
         );
     }
 }
@@ -50,16 +49,31 @@ function keepTextPikOutOfTaskManager(window) {
     window.keepAbove = true;
 }
 
-workspace.cursorPosChanged.connect(sendCursorPos);
-workspace.clientActivated.connect(onClientActivated);
+// KWin 6 renamed the client-oriented API to window-oriented signals. Keep the
+// guarded legacy branch so the same package remains usable on Plasma 5.
+if (workspace.cursorPosChanged) {
+    workspace.cursorPosChanged.connect(sendCursorPos);
+}
+if (workspace.windowActivated) {
+    workspace.windowActivated.connect(onWindowActivated);
+} else if (workspace.clientActivated) {
+    workspace.clientActivated.connect(onWindowActivated);
+}
 if (workspace.windowAdded) {
     workspace.windowAdded.connect(keepTextPikOutOfTaskManager);
+} else if (workspace.clientAdded) {
+    workspace.clientAdded.connect(keepTextPikOutOfTaskManager);
 }
-if (workspace.windowList) {
-    workspace.windowList().forEach(keepTextPikOutOfTaskManager);
+const existingWindows = workspace.stackingOrder ||
+    (workspace.windowList ? workspace.windowList() :
+        (workspace.clientList ? workspace.clientList() : []));
+if (existingWindows && existingWindows.forEach) {
+    existingWindows.forEach(keepTextPikOutOfTaskManager);
 }
 sendCursorPos();
-if (typeof setInterval === "function") {
-    setInterval(sendCursorPos, 1000);
-}
-print("TextPik cursor bridge loaded");
+// There is deliberately no heartbeat timer: KWin 6.7's script engine provides
+// neither a repeating setInterval nor a setTimeout, so a periodic refresh would
+// be dead code that only looks like it keeps the cursor fresh. Updates are
+// event-driven through cursorPosChanged, which does fire on every pointer
+// movement and is what makes the sample accurate at selection time.
+print("TextPik cursor/activation bridge loaded");

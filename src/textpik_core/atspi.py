@@ -43,9 +43,15 @@ class AtspiSelectionBackend:
         except Exception:
             self._focus_listener = None
 
-    def _on_focus_event(self, event):
+    def _on_focus_event(self, event, *_user_data):
         if getattr(event, "detail1", False):
             self._focused_node = getattr(event, "source", None)
+
+    def context_menu_active(self) -> bool:
+        """Use the cached focus event; never traverse the desktop hot path."""
+        if self._focused_node is None:
+            return False
+        return "menu" in self._role_name(self._focused_node).casefold()
 
     def subscribe_selection_changes(self, callback) -> bool:
         """Prefer accessibility events; callers may keep polling as fallback."""
@@ -63,7 +69,7 @@ class AtspiSelectionBackend:
             self._selection_callback = None
             return False
 
-    def _on_selection_event(self, event):
+    def _on_selection_event(self, event, *_user_data):
         callback = self._selection_callback
         if callback is not None:
             callback(getattr(event, "source", None))
@@ -72,7 +78,13 @@ class AtspiSelectionBackend:
         if not self.available or depth > 8:
             return None
         if node is None and self._focused_node is not None:
-            return self._focused_node
+            try:
+                states = self._focused_node.get_state_set()
+                if states.contains(self.atspi.StateType.FOCUSED):
+                    return self._focused_node
+            except Exception:
+                pass
+            self._focused_node = None
         if budget is None:
             budget = [400]
         if budget[0] <= 0:
@@ -110,11 +122,22 @@ class AtspiSelectionBackend:
             rect = text_iface.get_range_extents(start, end, coord)
             # Never request contents from a password/secret accessible object.
             text = "" if sensitive else text_iface.get_text(start, end)
-            anchor = PopupAnchor(
-                int(rect.x + rect.width),
-                int(rect.y + rect.height),
-                AnchorSource.ATSPI_SELECTION,
-                1.0,
+            rect_values = (
+                int(rect.x),
+                int(rect.y),
+                int(rect.width),
+                int(rect.height),
+            )
+            geometry_valid = rect_values[2] > 0 and rect_values[3] > 0
+            anchor = (
+                PopupAnchor(
+                    rect_values[0] + rect_values[2],
+                    rect_values[1] + rect_values[3],
+                    AnchorSource.ATSPI_SELECTION,
+                    1.0,
+                )
+                if geometry_valid
+                else None
             )
             return SelectionContext(
                 text=text,
@@ -126,7 +149,7 @@ class AtspiSelectionBackend:
                 selection_start=start,
                 selection_end=end,
                 backend="atspi",
-                selection_rect=(int(rect.x), int(rect.y), int(rect.width), int(rect.height)),
+                selection_rect=rect_values if geometry_valid else None,
                 native_handle=node,
             )
         except Exception:
@@ -193,10 +216,33 @@ class AtspiSelectionBackend:
         except Exception:
             return ""
 
-    def replace_selection(self, context: SelectionContext, replacement: str) -> bool:
+    def selection_still_matches(self, context: SelectionContext) -> bool:
+        """Revalidate authority immediately before mutating an AT-SPI target."""
         if context.backend != "atspi" or context.native_handle is None:
             return False
         if context.selection_start is None or context.selection_end is None:
+            return False
+        if context.sensitive:
+            return False
+
+        node = context.native_handle
+        try:
+            states = node.get_state_set()
+            if not states.contains(self.atspi.StateType.FOCUSED):
+                return False
+            text_iface = node.get_text_iface()
+            start, end = text_iface.get_selection(0)
+            if (start, end) != (context.selection_start, context.selection_end):
+                return False
+            role = self._role_name(node)
+            if self._is_protected(node, role):
+                return False
+            return text_iface.get_text(start, end) == context.text
+        except Exception:
+            return False
+
+    def replace_selection(self, context: SelectionContext, replacement: str) -> bool:
+        if not self.selection_still_matches(context):
             return False
         editable = self._editable(context.native_handle)
         if editable is None:

@@ -22,6 +22,9 @@
     <category>Utility</category>
   </categories>
   <releases>
+    <release version="0.5.0-rc.1" date="2026-07-14" type="development">
+      <description><p>TextPik Next candidate with inline insights, local ranking, grammar, undo, automations, OCR, private history and WASI extensions.</p></description>
+    </release>
     <release version="0.4.0-rc.1" date="2026-07-13" type="development">
       <description><p>Release candidate with crash-safe workers, intelligent selection sessions and cross-desktop Wayland integration.</p></description>
     </release>

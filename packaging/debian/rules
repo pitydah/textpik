@@ -10,3 +10,9 @@ override_dh_auto_install:
 	install -Dm644 packaging/io.github.pitydah.textpik.metainfo.xml debian/textpik/usr/share/metainfo/io.github.pitydah.textpik.metainfo.xml
 	cp -a assets debian/textpik/usr/share/textpik/
 	cp -a kwin debian/textpik/usr/share/textpik/
+	cp -a native debian/textpik/usr/share/textpik/
+	# The KWin placement effect is the backend that makes the popup follow the
+	# cursor on Plasma Wayland, so it is built here whenever the KWin and KF6
+	# development files are present. Without them the sources still ship.
+	packaging/kwin-effect/build.sh \
+		debian/textpik/usr/lib/$$(dpkg-architecture -qDEB_HOST_MULTIARCH)/qt6/plugins/kwin/effects/plugins

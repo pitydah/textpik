@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <title>Agregar magnet al servidor torrent</title>
+  <rect x="2.25" y="2.25" width="19.5" height="14" rx="2.25" stroke="#111111" stroke-width="1.75"/>
+  <path d="M3 6.2h18" stroke="#111111" stroke-width="1.75" stroke-linecap="round"/>
+  <circle cx="5" cy="4.25" r=".65" fill="#111111"/>
+  <circle cx="7.2" cy="4.25" r=".65" fill="#111111"/>
+  <path d="M7.4 13.4v-1.6a3.4 3.4 0 0 1 6.8 0v1.6" stroke="#111111" stroke-width="2.5" stroke-linecap="square" stroke-linejoin="round"/>
+  <path d="M18.1 7.7v3.2m-1.6-1.6h3.2" stroke="#111111" stroke-width="1.75" stroke-linecap="round"/>
+  <path d="M12 17.55v4m0 0-2.05-2.05M12 21.55l2.05-2.05" stroke="#111111" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

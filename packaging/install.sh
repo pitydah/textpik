@@ -4,15 +4,21 @@ set -euo pipefail
 APP_NAME="textpik"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-RUN_SCRIPT="$SCRIPT_DIR/run.sh"
 BIN_DIR="$HOME/.local/bin"
 BIN_PATH="$BIN_DIR/$APP_NAME"
 APP_DIR="$HOME/.local/share/$APP_NAME"
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 KWIN_SCRIPT_SOURCE="$APP_DIR/kwin/textpik-cursor-bridge"
 KWIN_SCRIPT_DEST="$HOME/.local/share/kwin/scripts/textpik-cursor-bridge"
+KWIN_EFFECT_SOURCE="$PROJECT_DIR/native/kwin-effect"
+# El subnivel "plugins" es obligatorio: KWin busca los efectos nativos en
+# <qt-plugins>/kwin/effects/plugins/, no directamente en kwin/effects/. Un .so
+# colocado un nivel mas arriba nunca se descubre.
+KWIN_EFFECT_DEST="$HOME/.local/lib/qt6/plugins/kwin/effects/plugins"
+QT_PLUGIN_PATH_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/90-textpik-qt-plugin-path.conf"
 
 MISSING=()
+RUNTIME_PYTHON="python3"
 
 info()  { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 ok()    { printf "\033[1;32m  OK\033[0m  %s\n" "$*"; }
@@ -32,15 +38,23 @@ command -v sudo &>/dev/null && HAS_SUDO=true
 pkg_install() {
     local pkgs=("$@")
     [[ ${#pkgs[@]} -eq 0 ]] && return 0
-    if $HAS_SUDO; then
+    local privileged=()
+    if [[ "$EUID" -eq 0 ]]; then
+        privileged=()
+    elif $HAS_SUDO; then
+        privileged=(sudo)
+    else
+        privileged=()
+    fi
+    if [[ "$EUID" -eq 0 ]] || $HAS_SUDO; then
         case "$PM" in
-            pacman) sudo pacman -S --needed --noconfirm "${pkgs[@]}" 2>/dev/null ;;
-            apt)    sudo apt install -y "${pkgs[@]}" 2>/dev/null ;;
-            dnf)    sudo dnf install -y "${pkgs[@]}" 2>/dev/null ;;
-            zypper) sudo zypper install -y "${pkgs[@]}" 2>/dev/null ;;
-            apk) sudo apk add "${pkgs[@]}" 2>/dev/null ;;
-            xbps-install) sudo xbps-install -Sy "${pkgs[@]}" 2>/dev/null ;;
-            slackpkg) sudo slackpkg install "${pkgs[@]}" 2>/dev/null ;;
+            pacman) "${privileged[@]}" pacman -S --needed --noconfirm "${pkgs[@]}" 2>/dev/null ;;
+            apt)    "${privileged[@]}" apt install -y "${pkgs[@]}" 2>/dev/null ;;
+            dnf)    "${privileged[@]}" dnf install -y "${pkgs[@]}" 2>/dev/null ;;
+            zypper) "${privileged[@]}" zypper install -y "${pkgs[@]}" 2>/dev/null ;;
+            apk) "${privileged[@]}" apk add "${pkgs[@]}" 2>/dev/null ;;
+            xbps-install) "${privileged[@]}" xbps-install -Sy "${pkgs[@]}" 2>/dev/null ;;
+            slackpkg) "${privileged[@]}" slackpkg install "${pkgs[@]}" 2>/dev/null ;;
         esac
     else
         warn "Sin sudo. Instalacion manual:"
@@ -76,7 +90,7 @@ install_pyside6() {
         zypper) try_install "PySide6" python3-pyside6 ;;
         apk) try_install "PySide6" py3-pyside6 ;;
         xbps-install) try_install "PySide6" python3-PySide6 ;;
-        slackpkg) warn "Slackware: PySide6 se instalara mediante pip si falta." ;;
+        slackpkg) warn "Slackware: PySide6 se instalará en un entorno privado." ;;
         apt)
             if pkg_install python3-pyside6 && python3 -c "import PySide6" &>/dev/null; then
                 ok "PySide6"; return 0
@@ -85,18 +99,26 @@ install_pyside6() {
                 && python3 -c "import PySide6" &>/dev/null; then
                 ok "PySide6 (modular)"; return 0
             fi
-            warn "PySide6 no disponible via apt. Probando pip."
+            warn "PySide6 no disponible vía apt. Creando un entorno privado."
             ;;
-        *) warn "Gestor desconocido. Probando pip." ;;
+        *) warn "Gestor desconocido. Creando un entorno privado." ;;
     esac
 
     if python3 -c "import PySide6" &>/dev/null; then return 0; fi
 
-    info "Instalando PySide6 via pip..."
-    python3 -m pip install --user PySide6 2>/dev/null || {
-        warn "PySide6 no se pudo instalar. Instalalo manualmente."
-        MISSING+=("PySide6 (pip)")
-    }
+    info "Instalando PySide6 en $APP_DIR/venv..."
+    if ! python3 -m venv "$APP_DIR/venv" 2>/dev/null; then
+        [[ "$PM" == "apt" ]] && pkg_install python3-venv || true
+        python3 -m venv "$APP_DIR/venv"
+    fi
+    if "$APP_DIR/venv/bin/pip" install "PySide6>=6.5,<6.12"; then
+        RUNTIME_PYTHON="$APP_DIR/venv/bin/python"
+        ok "PySide6 (entorno privado)"
+    else
+        warn "PySide6 no se pudo instalar. Instálalo manualmente."
+        MISSING+=("PySide6 (venv)")
+        return 1
+    fi
 }
 
 install_required_deps() {
@@ -177,11 +199,19 @@ install_binary() {
     cp -a "$PROJECT_DIR/src/textpik_core" "$APP_DIR/src/textpik_core"
     cp -a "$PROJECT_DIR/assets" "$APP_DIR/assets"
     cp -a "$PROJECT_DIR/kwin" "$APP_DIR/kwin"
+    if [[ -d "$PROJECT_DIR/native" ]]; then
+        cp -a "$PROJECT_DIR/native" "$APP_DIR/native"
+    fi
+    mkdir -p "$APP_DIR/scripts"
+    cp "$PROJECT_DIR/scripts/check_placement_backend.py" "$APP_DIR/scripts/"
     cp "$PROJECT_DIR/LICENSE" "$PROJECT_DIR/README.md" "$APP_DIR/"
+}
+
+install_launcher() {
     mkdir -p "$BIN_DIR"
     cat > "$BIN_PATH" << SCRIPT
 #!/usr/bin/env bash
-exec python3 "$APP_DIR/src/textpik.py" "\$@"
+exec "$RUNTIME_PYTHON" "$APP_DIR/src/textpik.py" "\$@"
 SCRIPT
     chmod +x "$BIN_PATH"
     ok "Comando instalado: $BIN_PATH"
@@ -238,10 +268,27 @@ install_kwin_bridge() {
     cp -a "$KWIN_SCRIPT_SOURCE/." "$KWIN_SCRIPT_DEST/"
     ok "KWin bridge copiado"
 
-    if command -v qdbus &>/dev/null; then
-        if qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \
-            "textpik-cursor-bridge" 2>/dev/null && \
-           qdbus org.kde.KWin /Scripting org.kde.kwin.Scripting.start 2>/dev/null; then
+    local qdbus_command=""
+    if command -v qdbus6 &>/dev/null; then
+        qdbus_command="qdbus6"
+    elif command -v qdbus &>/dev/null; then
+        qdbus_command="qdbus"
+    fi
+    if [[ -n "$qdbus_command" ]]; then
+        command -v kwriteconfig6 &>/dev/null && \
+            kwriteconfig6 --file kwinrc --group Plugins \
+                --key textpik-cursor-bridgeEnabled true
+        "$qdbus_command" org.kde.KWin /Scripting \
+            org.kde.kwin.Scripting.unloadScript \
+            "textpik-cursor-bridge" 2>/dev/null || true
+        local script_id
+        script_id=$("$qdbus_command" org.kde.KWin /Scripting \
+            org.kde.kwin.Scripting.loadScript \
+            "$KWIN_SCRIPT_DEST/contents/code/main.js" \
+            "textpik-cursor-bridge" 2>/dev/null || true)
+        if [[ "$script_id" =~ ^[0-9]+$ ]] && \
+           "$qdbus_command" org.kde.KWin "/Scripting/Script${script_id}" \
+            org.kde.kwin.Script.run 2>/dev/null; then
             ok "KWin bridge activado"
         else
             info "No se pudo activar automaticamente."
@@ -255,17 +302,94 @@ install_kwin_bridge() {
     fi
 }
 
+install_kwin_placement_effect() {
+    case "${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_DESKTOP:-}" in
+        *KDE*|*kde*|*Plasma*|*plasma*) ;;
+        *) info "Entorno no KDE: se omite el backend de placement."; return ;;
+    esac
+
+    if [[ ! -d "$KWIN_EFFECT_SOURCE" ]]; then
+        warn "Fuentes del efecto KWin no encontradas en $KWIN_EFFECT_SOURCE"
+        info "TextPik funciona igual; el popup queda sin placement verificado."
+        return
+    fi
+
+    # El efecto es opcional: si falta cualquier dependencia de compilacion se
+    # omite y TextPik arranca igual en modo degradado y explicito.
+    local missing_build=()
+    command -v cmake &>/dev/null || missing_build+=("cmake")
+    command -v ninja &>/dev/null || command -v make &>/dev/null || missing_build+=("ninja-build")
+    command -v c++ &>/dev/null || missing_build+=("gcc-c++")
+    [[ -f /usr/include/kwin/effect/effect.h ]] || missing_build+=("kwin-dev")
+    [[ -d /usr/include/KF6/KCoreAddons ]] || missing_build+=("kf6-kcoreaddons-dev")
+    [[ -d /usr/include/KF6/KConfigCore ]] || missing_build+=("kf6-kconfig-dev")
+    [[ -d /usr/include/KF6/KWindowSystem ]] || missing_build+=("kf6-kwindowsystem-dev")
+
+    if (( ${#missing_build[@]} > 0 )); then
+        warn "Faltan dependencias para compilar el efecto: ${missing_build[*]}"
+        info "TextPik funciona igual; solo se pierde el placement verificado en Plasma."
+        info "Instalalas y volve a correr este instalador para activarlo."
+        return
+    fi
+
+    local build_dir
+    build_dir="$(mktemp -d "${TMPDIR:-/tmp}/textpik-kwin-effect.XXXXXX")"
+    local generator="Ninja"
+    command -v ninja &>/dev/null || generator="Unix Makefiles"
+
+    if cmake -S "$KWIN_EFFECT_SOURCE" -B "$build_dir" -G "$generator" \
+            -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 && \
+       cmake --build "$build_dir" >/dev/null 2>&1; then
+        mkdir -p "$KWIN_EFFECT_DEST"
+        cp "$build_dir/textpik-placement.so" "$KWIN_EFFECT_DEST/"
+        ok "Efecto KWin compilado e instalado"
+
+        # Verificacion ABI + D-Bus antes de darlo por bueno.
+        if [[ -x "$build_dir/textpik-verify-effect" ]]; then
+            if "$build_dir/textpik-verify-effect" \
+                    "$build_dir/textpik-placement.so" >/dev/null 2>&1; then
+                ok "Efecto verificado contra la libkwin instalada"
+            else
+                warn "La verificacion del efecto fallo."
+                "$build_dir/textpik-verify-effect" \
+                    "$build_dir/textpik-placement.so" || true
+            fi
+        fi
+    else
+        warn "No se pudo compilar el efecto KWin."
+        info "TextPik funciona igual; el popup queda sin placement verificado."
+        rm -rf "$build_dir"
+        return
+    fi
+    rm -rf "$build_dir"
+
+    # KWin no agrega rutas de plugin de usuario y Qt solo mira /usr/lib/qt6/plugins,
+    # asi que el directorio tiene que exponerse a la sesion.
+    mkdir -p "$(dirname "$QT_PLUGIN_PATH_CONF")"
+    cat > "$QT_PLUGIN_PATH_CONF" <<EOF
+# Generado por TextPik: expone el directorio de plugins Qt del usuario para que
+# KWin encuentre el efecto de placement. Borra este archivo para desactivarlo.
+QT_PLUGIN_PATH=$HOME/.local/lib/qt6/plugins
+EOF
+    ok "QT_PLUGIN_PATH configurado para la sesion"
+
+    info "KWin carga los efectos solo al arrancar: cerra sesion y volve a entrar."
+    info "Despues verifica con:"
+    info "  python3 $APP_DIR/scripts/check_placement_backend.py"
+}
+
 main() {
     info "Instalando TextPik para escritorios Linux..."
 
-    chmod +x "$RUN_SCRIPT"
     install_required_deps
     install_optional_deps
-    install_pyside6
     install_binary
+    install_pyside6
+    install_launcher
     install_desktop_entry
     install_autostart
     install_kwin_bridge
+    install_kwin_placement_effect
 
     echo ""
     if [[ ${#MISSING[@]} -gt 0 ]]; then

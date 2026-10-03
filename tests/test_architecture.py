@@ -1,17 +1,22 @@
 import json
 import inspect
+import subprocess
+import sys
 import tempfile
 import unittest
 import weakref
 from pathlib import Path
+from types import SimpleNamespace
 from time import perf_counter_ns
 from unittest.mock import patch
 
 from src.textpik_core.actions import (
     PermissionStore,
     fuzzy_score,
+    infer_category,
     migrate_action,
     transform_text,
+    upgrade_builtin_action_metadata,
 )
 from src.textpik_core.anchors import (
     AnchorResolver,
@@ -19,6 +24,7 @@ from src.textpik_core.anchors import (
     place_popup,
     sway_cursor_anchor,
     stabilize_popup_position,
+    scale_anchor,
 )
 from src.textpik_core.extensions import inspect_local_extensions, load_local_extensions
 from src.textpik_core.atspi import AtspiSelectionBackend
@@ -27,7 +33,7 @@ from src.textpik_core.selection import (
     evaluate_selection_intent,
     is_file_workspace_selection,
 )
-from src.textpik_core.integration import action_availability
+from src.textpik_core.integration import RuntimeCapabilities, action_availability
 from src.textpik_core.popup_state import PopupPhase, PopupStateMachine
 from src.textpik_core.performance import PerformanceTracker
 from src.textpik_core.execution import executable_name, is_terminal_execution
@@ -38,7 +44,13 @@ from src.textpik_core.platform import (
     is_kde_desktop,
     is_wayland_session,
 )
-from src.textpik_core.planning import ContextSnapshot, plan_actions
+from src.textpik_core.planning import (
+    ContextSnapshot,
+    apply_profile_order,
+    order_actions_for_popup,
+    plan_actions,
+)
+from src.textpik_core.utilities import decode_jwt, sha256_digest
 from src.textpik_core.profiles import normalize_profiles, resolve_profile
 from src.textpik_core.settings import (
     DEFAULT_SETTINGS as CORE_DEFAULT_SETTINGS,
@@ -50,6 +62,52 @@ from src.textpik_core.text import build_command_argv, classify_text, normalize_u
 
 
 class ActionContractTest(unittest.TestCase):
+    def test_programmer_actions_are_local_and_deterministic(self):
+        self.assertEqual(
+            transform_text("json-string-escape", 'línea\n"valor"'),
+            '"línea\\n\\"valor\\""',
+        )
+        fenced = transform_text("code-fence", "print('ok')")
+        self.assertEqual(fenced, "```\nprint('ok')\n```")
+        self.assertEqual(transform_text("code-fence", fenced), "print('ok')")
+        self.assertEqual(
+            sha256_digest("TextPik"),
+            "683bc2fa005d1387a6c1af9e9190e5eaf512c7afeae2265a8002141f8c96e7ea",
+        )
+
+    def test_jwt_decoder_never_claims_signature_verification(self):
+        token = (
+            "eyJhbGciOiJub25lIn0."
+            "eyJzdWIiOiJ0ZXh0cGlrIiwicm9sZSI6ImRldiJ9."
+            "signature"
+        )
+        decoded = decode_jwt(token)
+        self.assertIn('"sub": "textpik"', decoded)
+        self.assertIn("no verificada", decoded)
+    def test_web_ai_providers_are_classified_as_ai(self):
+        self.assertEqual(
+            infer_category("Preguntar a Claude", "xdg-open https://claude.ai"),
+            "IA",
+        )
+        self.assertEqual(
+            infer_category("Preguntar a Gemini", "xdg-open https://gemini.google.com"),
+            "IA",
+        )
+
+    def test_builtin_icon_upgrade_preserves_custom_icons(self):
+        actions = [
+            {"cmd": "insight", "icon": "counter.svg", "context": ["number", "currency", "text"]},
+            {"cmd": "speak", "icon": "/tmp/my-speaker.svg", "context": ["text"]},
+            {"cmd": "uppercase", "icon": "uppercase.svg", "name": "MAYUSCULAS"},
+            {"cmd": "lowercase", "icon": "lowercase.svg", "name": "Mi minúscula"},
+        ]
+        self.assertTrue(upgrade_builtin_action_metadata(actions))
+        self.assertEqual(actions[0]["icon"], "calculator.svg")
+        self.assertEqual(actions[0]["context"], ["number", "currency"])
+        self.assertEqual(actions[1]["icon"], "/tmp/my-speaker.svg")
+        self.assertEqual(actions[2]["name"], "Convertir a mayúsculas")
+        self.assertEqual(actions[3]["name"], "Mi minúscula")
+
     def test_legacy_transform_gets_typed_contract(self):
         action = migrate_action(
             {"name": "Mayúsculas", "icon": "uppercase.svg", "cmd": "uppercase"}
@@ -61,6 +119,34 @@ class ActionContractTest(unittest.TestCase):
     def test_transform_behavior(self):
         self.assertEqual(transform_text("remove-breaks", "a\n  b"), "a b")
         self.assertEqual(transform_text("capitalize", "hola. mundo"), "Hola. Mundo")
+        self.assertEqual(transform_text("normalize-spaces", " a   b \n c "), "a b\nc")
+        self.assertEqual(transform_text("bullet-list", "uno\ndos"), "• uno\n• dos")
+        self.assertEqual(transform_text("unique-lines", "b\na\nb"), "b\na")
+        encoded = transform_text("base64-encode", "TextPik ✓")
+        self.assertEqual(transform_text("base64-decode", encoded), "TextPik ✓")
+
+    def test_premium_case_line_quote_and_list_transformations(self):
+        self.assertEqual(transform_text("uppercase", "árbol Straße"), "ÁRBOL STRASSE")
+        self.assertEqual(transform_text("lowercase", "ÁRBOL ÑANDÚ"), "árbol ñandú")
+        self.assertEqual(
+            transform_text("capitalize", "hOLA MUNDO. ¿cÓMO ESTÁS?\nBIEN."),
+            "Hola mundo. ¿Cómo estás?\nBien.",
+        )
+        self.assertEqual(
+            transform_text("remove-breaks", "Una pala-\nbra \n, bien.\r\nOtra"),
+            "Una palabra, bien. Otra",
+        )
+        self.assertEqual(transform_text("quote-text", '"hola"'), "“hola”")
+        self.assertEqual(transform_text("quote-text", "«hola»"), "“hola”")
+        self.assertEqual(transform_text("quote-text", "“hola”"), "“hola”")
+        self.assertEqual(transform_text("quote-text", "  "), "")
+        self.assertEqual(
+            transform_text(
+                "bullet-list",
+                "- tarea\n1. otra\n-5 grados\n  * anidada",
+            ),
+            "• tarea\n• otra\n• -5 grados\n  • anidada",
+        )
 
     def test_fuzzy_action_search(self):
         self.assertIsNotNone(fuzzy_score("trgoogle", "Traducir con Google"))
@@ -132,8 +218,88 @@ class ActionPlanningTest(unittest.TestCase):
         )
         self.assertEqual([action["id"] for action in planned], ["copy", "count"])
 
+    def test_pinned_action_survives_context_and_profile_bar_filters(self):
+        actions = [
+            {
+                "id": "magnet",
+                "name": "Magnet",
+                "cmd": "open-magnet",
+                "context": ["magnet"],
+                "pinned": True,
+            },
+            {"id": "copy", "name": "Copy", "cmd": "copy"},
+        ]
+        planned = plan_actions(
+            actions,
+            ContextSnapshot(text_types=frozenset({"text"})),
+            allowed_action_ids=frozenset({"copy"}),
+        )
+        self.assertEqual(
+            [action["id"] for action in planned],
+            ["magnet", "copy"],
+        )
+
+    def test_planner_filters_editable_and_multiline_actions(self):
+        actions = [
+            {"name": "Cut", "cmd": "cut", "requires_editable": True},
+            {"name": "List", "cmd": "bullet-list", "requires_multiline": True},
+        ]
+        self.assertEqual(plan_actions(actions, ContextSnapshot()), [])
+        snapshot = ContextSnapshot(editable=True, multiline=True)
+        self.assertEqual(len(plan_actions(actions, snapshot)), 2)
+
+    def test_planner_only_offers_undo_when_a_record_exists(self):
+        actions = [{"name": "Undo", "cmd": "undo"}]
+        self.assertEqual(plan_actions(actions, ContextSnapshot()), [])
+        self.assertEqual(
+            len(plan_actions(actions, ContextSnapshot(undo_available=True))), 1
+        )
+
+    def test_planner_hides_clipboard_dependent_actions_when_empty(self):
+        actions = [
+            {"name": "Compare", "cmd": "compare-clipboard", "requires_clipboard": True}
+        ]
+        self.assertEqual(plan_actions(actions, ContextSnapshot()), [])
+        self.assertEqual(
+            len(plan_actions(actions, ContextSnapshot(clipboard_has_text=True))), 1
+        )
+
+    def test_order_boundary_preserves_manual_order_despite_metadata(self):
+        actions = [
+            {"cmd": "ocr", "placement": "palette", "priority": 100},
+            {"cmd": "open", "context": ["url"], "priority": 20},
+            {"cmd": "copy", "priority": 40},
+            {"cmd": "custom", "pinned": True, "priority": -100},
+        ]
+        ordered = order_actions_for_popup(
+            actions, ContextSnapshot(text_types=frozenset({"text", "url"}))
+        )
+        self.assertEqual(
+            [action["cmd"] for action in ordered],
+            ["ocr", "open", "copy", "custom"],
+        )
+
 
 class ContextProfileTest(unittest.TestCase):
+    def test_profile_order_is_explicit_and_developer_mode_matches_app_or_code(self):
+        actions = [
+            {"id": "copy", "cmd": "copy"},
+            {"id": "json", "cmd": "format-json"},
+            {"id": "terminal", "cmd": "terminal"},
+        ]
+        ordered = apply_profile_order(actions, ("terminal", "copy", "json"))
+        self.assertEqual([item["id"] for item in ordered], ["terminal", "copy", "json"])
+        profiles = [{
+            "name": "Dev", "mode": "developer", "application": "",
+            "applications": ["code", "konsole"], "text_types": ["code", "json"],
+            "action_ids": ["terminal", "copy"],
+        }]
+        self.assertIsNotNone(
+            resolve_profile(profiles, ContextSnapshot(application="Visual Studio Code"))
+        )
+        self.assertIsNotNone(
+            resolve_profile(profiles, ContextSnapshot(text_types=frozenset({"json"})))
+        )
     def test_normalization_discards_empty_and_bounds_profiles(self):
         profiles = normalize_profiles(
             [
@@ -146,17 +312,10 @@ class ContextProfileTest(unittest.TestCase):
                 },
             ]
         )
-        self.assertEqual(
-            profiles,
-            [
-                {
-                    "name": "Web",
-                    "application": "Firefox",
-                    "text_types": ["url"],
-                    "action_ids": ["copy", "search"],
-                }
-            ],
-        )
+        self.assertEqual(profiles[0]["name"], "Web")
+        self.assertEqual(profiles[0]["applications"], ["Firefox"])
+        self.assertEqual(profiles[0]["action_ids"], ["copy", "search"])
+        self.assertEqual(profiles[0]["mode"], "custom")
 
     def test_first_matching_profile_has_explicit_priority(self):
         profiles = [
@@ -178,7 +337,7 @@ class ContextProfileTest(unittest.TestCase):
         )
         profile = resolve_profile(profiles, snapshot)
         self.assertEqual(profile.name, "Firefox URLs")
-        self.assertEqual(profile.action_ids, frozenset({"open"}))
+        self.assertEqual(profile.action_ids, ("open",))
 
     def test_profile_never_retains_selected_text(self):
         profile = resolve_profile(
@@ -242,9 +401,34 @@ class PerformanceContractTest(unittest.TestCase):
             __import__("src.textpik_core.execution", fromlist=["*"]),
             __import__("src.textpik_core.settings", fromlist=["*"]),
             __import__("src.textpik_core.storage", fromlist=["*"]),
+            # Placement authority stays Qt-free at import time.
+            __import__("src.textpik_core.models", fromlist=["*"]),
+            __import__("src.textpik_core.placement", fromlist=["*"]),
         )
         for module in modules:
             self.assertNotIn("PySide6", inspect.getsource(module))
+
+    def test_placement_client_imports_qt_lazily(self):
+        """The compositor client may name QtDBus, but must not import it eagerly.
+
+        The placement client needs QtDBus on first call, which would put Qt on
+        the popup hot path if it happened at import time. A subprocess is used
+        because the test session already has PySide6 loaded.
+        """
+        root = Path(__file__).resolve().parents[1]
+        code = (
+            "import sys;"
+            "import src.textpik_core.placement_client as client;"
+            "assert 'PySide6' not in sys.modules, 'Qt was imported eagerly';"
+            "assert client.KWinPlacementClient is not None;"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            cwd=root,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class PlatformContractTest(unittest.TestCase):
@@ -281,6 +465,51 @@ class ExecutionPolicyTest(unittest.TestCase):
 
 
 class SettingsContractTest(unittest.TestCase):
+    def test_integration_preferences_are_validated_and_preserved(self):
+        normalized = normalize_core_settings(
+            {
+                "ollama_endpoint": "http://localhost:11434/api/generate",
+                "ollama_model": "qwen2.5:3b",
+                "languagetool_endpoint": "https://language.example/v2/check",
+                "grammar_language": "es-CL",
+                "ocr_languages": "spa+eng",
+                "media_player": "mpv",
+                "terminal_app": "kitty",
+                "kdeconnect_device": "phone-01",
+                "speech_engine": "spd-say",
+            }
+        )
+        self.assertEqual(normalized["ollama_model"], "qwen2.5:3b")
+        self.assertEqual(normalized["grammar_language"], "es-CL")
+        self.assertEqual(normalized["ocr_languages"], "spa+eng")
+        self.assertEqual(normalized["media_player"], "mpv")
+        self.assertEqual(normalized["kdeconnect_device"], "phone-01")
+
+        rejected = normalize_core_settings(
+            {
+                "ollama_endpoint": "https://remote.example/api/generate",
+                "terminal_app": "kitty --execute",
+                "ocr_languages": "spa; rm -rf /",
+            }
+        )
+        self.assertEqual(
+            rejected["ollama_endpoint"], CORE_DEFAULT_SETTINGS["ollama_endpoint"]
+        )
+        self.assertEqual(rejected["terminal_app"], "auto")
+        self.assertEqual(rejected["ocr_languages"], "auto")
+
+    def test_rc5_popup_limits_migrate_to_eight_direct_actions(self):
+        migrated = normalize_core_settings(
+            {
+                "ui_version": 5,
+                "max_popup_actions": 6,
+                "popup_compact_actions": 4,
+            }
+        )
+        self.assertEqual(migrated["ui_version"], 13)
+        self.assertEqual(migrated["max_popup_actions"], 8)
+        self.assertEqual(migrated["popup_compact_actions"], 8)
+
     def test_legacy_ui_defaults_migrate_without_overwriting_custom_values(self):
         migrated = normalize_core_settings(
             {
@@ -290,10 +519,41 @@ class SettingsContractTest(unittest.TestCase):
                 "popup_background_color": "#123456",
             }
         )
-        self.assertEqual(migrated["ui_version"], 3)
+        self.assertEqual(migrated["ui_version"], 13)
         self.assertEqual(migrated["popup_icon_size"], 17)
         self.assertEqual(migrated["popup_spacing"], 2)
         self.assertEqual(migrated["popup_background_color"], "#123456")
+        self.assertEqual(migrated["popup_min_confidence"], 62)
+        self.assertEqual(migrated["popup_full_confidence"], 84)
+
+    def test_rc6_stock_popup_behavior_migrates_without_overwriting_custom_values(self):
+        stock = normalize_core_settings(
+            {
+                "ui_version": 6,
+                "popup_auto_hide_ms": 5000,
+                "popup_cursor_gap": 6,
+            }
+        )
+        self.assertEqual(stock["ui_version"], 13)
+        self.assertEqual(stock["popup_auto_hide_ms"], 8000)
+        self.assertEqual(stock["popup_cursor_gap"], 3)
+
+        custom = normalize_core_settings(
+            {
+                "ui_version": 6,
+                "popup_auto_hide_ms": 9000,
+                "popup_cursor_gap": 10,
+            }
+        )
+        self.assertEqual(custom["popup_auto_hide_ms"], 9000)
+        self.assertEqual(custom["popup_cursor_gap"], 10)
+
+    def test_rc7_stock_lifetime_migrates_to_eight_seconds(self):
+        migrated = normalize_core_settings(
+            {"ui_version": 7, "popup_auto_hide_ms": 12000}
+        )
+        self.assertEqual(migrated["ui_version"], 13)
+        self.assertEqual(migrated["popup_auto_hide_ms"], 8000)
 
     def test_settings_schema_drops_unknown_keys_and_bounds_values(self):
         normalized = normalize_core_settings(
@@ -374,6 +634,37 @@ class AnchorTest(unittest.TestCase):
         high = PopupAnchor(8, 9, AnchorSource.ATSPI_SELECTION, 1.0)
         self.assertEqual(resolver.resolve([low, high]), high)
 
+    def test_resolver_explains_source_and_normalizes_scale(self):
+        # Qt's own pointer is capped at 0.72 in production (0.2 on Wayland), so
+        # selection geometry still outranks it as placement evidence.
+        qt = PopupAnchor(10, 20, AnchorSource.QT_POINTER, 0.72)
+        atspi = PopupAnchor(11, 21, AnchorSource.ATSPI_SELECTION, 0.85)
+        decision = AnchorResolver().resolve_with_reason((qt, atspi))
+        self.assertEqual(decision.anchor, atspi)
+        self.assertEqual(decision.reason, "atspi-selection")
+        scaled = scale_anchor(atspi, 1.5)
+        self.assertEqual((scaled.x, scaled.y), (16, 32))
+
+    def test_fresh_compositor_cursor_outranks_selection_geometry(self):
+        """The product contract is "popup next to the cursor".
+
+        AT-SPI geometry stays valuable as avoid/fallback evidence, but a fresh
+        compositor cursor must win the placement anchor even at high selection
+        confidence.
+        """
+        atspi = PopupAnchor(200, 300, AnchorSource.ATSPI_SELECTION, 0.95)
+        for source, confidence in (
+            (AnchorSource.KWIN, 0.98),
+            (AnchorSource.X11_POINTER, 0.96),
+            (AnchorSource.HYPRLAND, 0.94),
+            (AnchorSource.SWAY, 0.92),
+        ):
+            with self.subTest(source=source):
+                cursor = PopupAnchor(700, 460, source, confidence)
+                decision = AnchorResolver().resolve_with_reason((atspi, cursor))
+                self.assertEqual(decision.anchor, cursor)
+                self.assertEqual(decision.reason, source.value)
+
     @patch("src.textpik_core.anchors.shutil.which", return_value="/usr/bin/hyprctl")
     @patch("src.textpik_core.anchors._run_json", return_value={"x": 12.4, "y": 33.8})
     def test_hyprland_adapter(self, _run, _which):
@@ -393,6 +684,25 @@ class AnchorTest(unittest.TestCase):
         selection = (100, 100, 180, 24)
         x, y = place_popup((280, 124), (160, 40), (0, 0, 800, 600), selection, 6)
         self.assertFalse(100 < x + 160 and x < 280 and 100 < y + 40 and y < 124)
+
+    def test_popup_uses_nearest_clear_cursor_quadrant(self):
+        selection = (100, 100, 180, 24)
+        x, y = place_popup((280, 124), (160, 40), (0, 0, 800, 600), selection, 3)
+        self.assertLessEqual(abs(x - 283), 1)
+        self.assertLessEqual(abs(y - 127), 1)
+
+    def test_explicit_position_preference_overrides_pointer_direction(self):
+        selection = (100, 100, 180, 24)
+        _x, y = place_popup(
+            (280, 124),
+            (160, 40),
+            (0, 0, 800, 600),
+            selection,
+            3,
+            pointer_direction=(40, 0),
+            preference="above",
+        )
+        self.assertEqual(y, 57)
 
     def test_popup_stays_on_screen_near_bottom_right_edge(self):
         x, y = place_popup((795, 595), (160, 40), (0, 0, 800, 600), gap=6)
@@ -422,6 +732,13 @@ class AnchorTest(unittest.TestCase):
 
 
 class SelectionPolicyTest(unittest.TestCase):
+    def test_collapsed_accessibility_range_is_rejected(self):
+        context = SelectionContext("hola", selection_start=3, selection_end=3)
+        self.assertEqual(
+            evaluate_selection_intent(context, context.text).reason,
+            "collapsed-selection",
+        )
+
     def test_file_item_is_ignored_but_file_manager_text_is_allowed(self):
         file_item = SelectionContext(
             "report.pdf", application="Dolphin", role="list item"
@@ -515,6 +832,92 @@ class SpellingServiceTest(unittest.TestCase):
 
 
 class IntegrationPolicyTest(unittest.TestCase):
+    @patch(
+        "src.textpik_core.integration.which",
+        side_effect=lambda name: "/usr/bin/mpv" if name == "mpv" else None,
+    )
+    def test_action_availability_respects_explicit_application_preferences(self, _which):
+        self.assertTrue(
+            action_availability(
+                "open-media-player", wayland=True, kde=False,
+                preferred_media_player="mpv",
+            ).available
+        )
+        unavailable = action_availability(
+            "terminal", wayland=True, kde=False, preferred_terminal="kitty"
+        )
+        self.assertFalse(unavailable.available)
+        self.assertIn("kitty", unavailable.label)
+
+    @patch("src.textpik_core.integration.which", return_value="/usr/bin/tesseract")
+    def test_action_availability_rejects_missing_configured_ocr_language(self, _which):
+        status = action_availability(
+            "ocr-image", wayland=True, kde=False,
+            capabilities=RuntimeCapabilities(ocr_languages=("eng",)),
+            preferred_ocr_languages="spa+eng",
+        )
+        self.assertFalse(status.available)
+        self.assertIn("spa", status.label)
+
+    @patch("src.textpik_core.integration.which", return_value="/usr/bin/tool")
+    def test_optional_providers_require_their_real_runtime_capability(self, _which):
+        unavailable = RuntimeCapabilities()
+        self.assertFalse(
+            action_availability(
+                "ollama", wayland=True, kde=False, capabilities=unavailable
+            ).available
+        )
+        self.assertFalse(
+            action_availability(
+                "grammar", wayland=True, kde=False, capabilities=unavailable
+            ).available
+        )
+        self.assertFalse(
+            action_availability(
+                "spellcheck", wayland=True, kde=False, capabilities=unavailable
+            ).available
+        )
+
+        ready = RuntimeCapabilities(
+            ollama_model="llama3.2:latest",
+            ocr_languages=("eng",),
+            spelling_language="es_CL",
+            grammar_ready=True,
+        )
+        ollama = action_availability(
+            "ollama", wayland=True, kde=False, capabilities=ready
+        )
+        self.assertTrue(ollama.available)
+        self.assertIn("llama3.2", ollama.label)
+        ocr = action_availability(
+            "ocr-image", wayland=True, kde=False, capabilities=ready
+        )
+        self.assertTrue(ocr.available)
+        self.assertTrue(ocr.degraded)
+
+    def test_private_history_is_hidden_while_feature_is_disabled(self):
+        status = action_availability(
+            "textpik-history",
+            wayland=True,
+            kde=False,
+            history_enabled=False,
+        )
+        self.assertFalse(status.available)
+        self.assertIn("Configuración", status.label)
+
+    @patch(
+        "src.textpik_core.integration.which",
+        side_effect=lambda name: "/usr/bin/tesseract" if name == "tesseract" else None,
+    )
+    def test_ocr_region_accepts_xdg_screenshot_portal(self, _which):
+        status = action_availability(
+            "ocr-region",
+            wayland=True,
+            kde=False,
+            dbus_services={"org.freedesktop.portal.Desktop"},
+        )
+        self.assertTrue(status.available)
+
     @patch("src.textpik_core.integration.which", return_value=None)
     def test_paste_degrades_to_clipboard_without_injection_tool(self, _which):
         status = action_availability(
@@ -613,6 +1016,14 @@ class ExtensionTest(unittest.TestCase):
 
 
 class AtspiTest(unittest.TestCase):
+    def test_cached_menu_focus_suppresses_popup_without_desktop_scan(self):
+        backend = AtspiSelectionBackend(atspi=object())
+        backend._focused_node = object()
+        with patch.object(backend, "_role_name", return_value="popup menu"):
+            self.assertTrue(backend.context_menu_active())
+        with patch.object(backend, "_role_name", return_value="text entry"):
+            self.assertFalse(backend.context_menu_active())
+
     def test_reads_typed_selection_context(self):
         class Rect:
             x = 10
@@ -693,8 +1104,9 @@ class AtspiTest(unittest.TestCase):
         self.assertTrue(context.sensitive)
         self.assertEqual(context.text, "")
 
-    def test_replaces_selection_through_editable_interface(self):
-        calls = []
+    @staticmethod
+    def _live_selection_node(calls, *, focused=True, selected=(2, 5), text="old"):
+        """Build a node that passes the JIT revalidation before a mutation."""
 
         class Editable:
             def delete_text(self, start, end):
@@ -703,24 +1115,104 @@ class AtspiTest(unittest.TestCase):
             def insert_text(self, start, text, length):
                 calls.append(("insert", start, text, length))
 
+        class TextInterface:
+            def get_selection(self, _index):
+                return selected
+
+            def get_text(self, start, end):
+                return text
+
+        class StateSet:
+            def contains(self, state):
+                # FOCUSED must hold and PROTECTED must not, otherwise the
+                # mutation is refused.
+                return state == "focused" if focused else False
+
+        class Role:
+            value_nick = "text"
+
         class Node:
             def get_editable_text_iface(self):
                 return Editable()
 
-        backend = AtspiSelectionBackend(atspi=object())
+            def get_state_set(self):
+                return StateSet()
+
+            def get_text_iface(self):
+                return TextInterface()
+
+            def get_role(self):
+                return Role()
+
+            def get_role_name(self):
+                return "text"
+
+        return Node()
+
+    def _atspi_stub(self):
+        state_type = SimpleNamespace(FOCUSED="focused", PROTECTED="protected")
+        return SimpleNamespace(StateType=state_type)
+
+    def test_replaces_selection_through_editable_interface(self):
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
         context = SelectionContext(
             text="old",
             editable=True,
             backend="atspi",
             selection_start=2,
             selection_end=5,
-            native_handle=Node(),
+            native_handle=self._live_selection_node(calls),
         )
         self.assertTrue(backend.replace_selection(context, "new"))
         self.assertEqual(
             calls,
             [("delete", 2, 5), ("insert", 2, "new", 3)],
         )
+
+    def test_refuses_to_mutate_when_the_target_selection_changed(self):
+        """Authority is revalidated immediately before mutating AT-SPI."""
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
+        context = SelectionContext(
+            text="old",
+            editable=True,
+            backend="atspi",
+            selection_start=2,
+            selection_end=5,
+            # The document moved on after the context was captured.
+            native_handle=self._live_selection_node(calls, selected=(2, 9)),
+        )
+        self.assertFalse(backend.replace_selection(context, "new"))
+        self.assertEqual(calls, [])
+
+    def test_refuses_to_mutate_when_the_target_lost_focus(self):
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
+        context = SelectionContext(
+            text="old",
+            editable=True,
+            backend="atspi",
+            selection_start=2,
+            selection_end=5,
+            native_handle=self._live_selection_node(calls, focused=False),
+        )
+        self.assertFalse(backend.replace_selection(context, "new"))
+        self.assertEqual(calls, [])
+
+    def test_refuses_to_mutate_when_the_selected_text_changed(self):
+        calls = []
+        backend = AtspiSelectionBackend(atspi=self._atspi_stub())
+        context = SelectionContext(
+            text="old",
+            editable=True,
+            backend="atspi",
+            selection_start=2,
+            selection_end=5,
+            native_handle=self._live_selection_node(calls, text="otro"),
+        )
+        self.assertFalse(backend.replace_selection(context, "new"))
+        self.assertEqual(calls, [])
 
     def test_selection_event_subscription_forwards_source(self):
         listeners = []

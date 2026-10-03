@@ -30,6 +30,14 @@ jobs:
           sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0
       - run: python -m pip install -e . ruff coverage build twine
       - run: python -m unittest discover -s tests -v
+      - name: V14 RC boundary truth regressions
+        run: python -m unittest tests.test_popup_v14_rc -v
+      - run: python scripts/check_performance.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Exercise 500 popup lifecycles
+        if: matrix.python == '3.11'
+        run: python scripts/check_app_stability.py
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python -m py_compile src/textpik.py src/textpik_core/*.py
@@ -59,14 +67,19 @@ jobs:
             debhelper dh-python pybuild-plugin-pyproject python3-all python3-setuptools
       - run: desktop-file-validate packaging/textpik.desktop
       - run: appstreamcli validate --no-net packaging/io.github.pitydah.textpik.metainfo.xml
-      - run: bash -n packaging/install.sh packaging/run.sh packaging/appimage/build.sh packaging/debian/build.sh packaging/rpm/build.sh
+      - run: >-
+          bash -n packaging/install.sh packaging/run.sh
+          packaging/appimage/build.sh packaging/appimage/build-container.sh
+          packaging/arch/build-container.sh packaging/flatpak/build.sh
+          packaging/debian/build.sh packaging/rpm/build.sh
       - run: python -m json.tool packaging/flatpak/io.github.pitydah.textpik.json >/dev/null
       - run: python scripts/check_release.py
       - name: Build and inspect Debian package
         run: |
           packaging/debian/build.sh
           dpkg-deb --info dist/textpik_*_all.deb
-          dpkg-deb --contents dist/textpik_*_all.deb | grep -q './usr/bin/textpik'
+          dpkg-deb --contents dist/textpik_*_all.deb > "$RUNNER_TEMP/textpik-deb-contents"
+          grep -q './usr/bin/textpik' "$RUNNER_TEMP/textpik-deb-contents"
       - name: Build and inspect Fedora packages
         run: |
           docker run --rm -v "$PWD:/source" -w /source fedora:latest bash -lc '
@@ -74,7 +87,36 @@ jobs:
             git config --global --add safe.directory /source
             packaging/rpm/build.sh
             rpm -qpi dist/textpik-*.noarch.rpm
-            rpm -qlp dist/textpik-*.noarch.rpm | grep -q /usr/bin/textpik
+            rpm -qlp dist/textpik-*.noarch.rpm > /tmp/textpik-rpm-contents
+            grep -q /usr/bin/textpik /tmp/textpik-rpm-contents
+          '
+
+  kwin-effect:
+    # The placement backend is native and links against the KWin of the machine
+    # that builds it, so it needs a distribution that ships KWin 6 development
+    # files. The Ubuntu runner image only carries Plasma 5, which is why this
+    # job uses the rolling Arch image instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build and verify the KWin placement effect
+        run: |
+          docker run --rm -v "$PWD:/source" -w /source archlinux:latest bash -lc '
+            set -e
+            pacman -Sy --noconfirm --needed \
+              cmake ninja gcc qt6-base kwin kcoreaddons kconfig kwindowsystem
+            cmake -S native/kwin-effect -B /tmp/effect -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release
+            cmake --build /tmp/effect
+            # Fails on an ABI mismatch, on a wrong plugin IID, and on a D-Bus
+            # surface that does not follow the documented protocol.
+            /tmp/effect/textpik-verify-effect /tmp/effect/textpik-placement.so
+            # The IID has to track the headers, not a pinned literal.
+            version=$(sed -n "s/^#define KWIN_PLUGIN_VERSION_STRING \"\(.*\)\"/\1/p" \
+              /usr/include/kwin/config-kwin.h)
+            strings /tmp/effect/textpik-placement.so \
+              | grep -q "org.kde.kwin.EffectPluginFactory$version"
+            echo "efecto compilado y verificado contra KWin $version"
           '
 
   x11-smoke:
