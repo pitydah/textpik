@@ -108,7 +108,10 @@ private:
 class TextPikPlacementEffectFactory : public KWin::EffectPluginFactory
 {
     Q_OBJECT
-    Q_PLUGIN_METADATA(IID "org.kde.kwin.EffectPluginFactory6.7.5" FILE "metadata.json")
+    // The plugin interface changes with KWin's version, so the IID comes from
+    // the headers the effect is compiled against rather than a pinned literal.
+    // moc resolves this macro to the string KWin's own factory macros use.
+    Q_PLUGIN_METADATA(IID EffectPluginFactory_iid FILE "metadata.json")
     Q_INTERFACES(KPluginFactory)
 
 public:

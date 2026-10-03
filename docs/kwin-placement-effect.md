@@ -136,6 +136,32 @@ If the effect is listed but not active, enable it with:
 qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect textpik-placement
 ```
 
+## Packaging
+
+The effect links against the KWin of the machine that builds it, and KWin
+rejects a plugin whose interface id does not match its own version. The id is
+therefore taken from `EffectPluginFactory_iid` in the KWin headers rather than
+from a pinned literal, and packages ship the **sources** plus an optional
+builder instead of a binary that could be refused elsewhere:
+
+- `packaging/kwin-effect/build.sh` compiles the effect and skips with a clear
+  message, exiting successfully, when the KWin, KF6 or Qt development files are
+  absent. A package build without the toolchain still succeeds and still ships
+  the sources.
+- Debian and Arch build the effect at package time and install it into the
+  system Qt plugin directory. RPM builds it into the package data directory,
+  because RPM cannot own a path that only exists when an optional build
+  dependency is present.
+- The wheel ships the sources, so a packaged install can still compile the
+  effect against the local KWin.
+- `packaging/install.sh` builds and installs it per user, which is the path that
+  works for any of them.
+
+A `kwin-effect` CI job builds the plugin in a rolling Arch container and runs
+`textpik-verify-effect`, so the native component is a real gate rather than a
+local check. That job also asserts the embedded id matches the KWin headers it
+compiled against.
+
 ## Verifying a build
 
 `native/kwin-effect/verify_effect.cpp` loads the built plugin the way KWin would

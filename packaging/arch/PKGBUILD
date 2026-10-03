@@ -10,6 +10,10 @@ arch=('any')
 url="https://github.com/pitydah/textpik"
 license=('GPL3')
 depends=('python' 'pyside6' 'python-gobject' 'at-spi2-core' 'wl-clipboard' 'xdotool' 'qt6-svg')
+# The placement effect links against the KWin headers KWin itself was built
+# with, so the compositor package is a build dependency: an effect compiled
+# against a different KWin would be rejected when the plugin is loaded.
+makedepends=('cmake' 'ninja' 'kwin' 'kcoreaddons' 'kconfig' 'kwindowsystem')
 optdepends=('ydotool: auto-paste on Wayland'
             'wtype: auto-paste on Wayland'
             'konsole: terminal action'
@@ -34,4 +38,11 @@ package() {
     install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     cp -r assets "$pkgdir/usr/share/textpik/"
     cp -r kwin "$pkgdir/usr/share/textpik/"
+    cp -r native "$pkgdir/usr/share/textpik/"
+    # The KWin placement effect is the backend that makes the popup follow the
+    # cursor on Plasma Wayland. It is built when the KWin and KF6 development
+    # files are present and skipped with a message otherwise, so the package
+    # still builds and still ships the sources.
+    bash packaging/kwin-effect/build.sh \
+        "$pkgdir/usr/lib/qt6/plugins/kwin/effects/plugins"
 }

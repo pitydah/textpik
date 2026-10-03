@@ -91,6 +91,34 @@ jobs:
             grep -q /usr/bin/textpik /tmp/textpik-rpm-contents
           '
 
+  kwin-effect:
+    # The placement backend is native and links against the KWin of the machine
+    # that builds it, so it needs a distribution that ships KWin 6 development
+    # files. The Ubuntu runner image only carries Plasma 5, which is why this
+    # job uses the rolling Arch image instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build and verify the KWin placement effect
+        run: |
+          docker run --rm -v "$PWD:/source" -w /source archlinux:latest bash -lc '
+            set -e
+            pacman -Sy --noconfirm --needed \
+              cmake ninja gcc qt6-base kwin kcoreaddons kconfig kwindowsystem
+            cmake -S native/kwin-effect -B /tmp/effect -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release
+            cmake --build /tmp/effect
+            # Fails on an ABI mismatch, on a wrong plugin IID, and on a D-Bus
+            # surface that does not follow the documented protocol.
+            /tmp/effect/textpik-verify-effect /tmp/effect/textpik-placement.so
+            # The IID has to track the headers, not a pinned literal.
+            version=$(sed -n "s/^#define KWIN_PLUGIN_VERSION_STRING \"\(.*\)\"/\1/p" \
+              /usr/include/kwin/config-kwin.h)
+            strings /tmp/effect/textpik-placement.so \
+              | grep -q "org.kde.kwin.EffectPluginFactory$version"
+            echo "efecto compilado y verificado contra KWin $version"
+          '
+
   x11-smoke:
     runs-on: ubuntu-latest
     steps:

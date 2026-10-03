@@ -80,6 +80,48 @@ class PackagingTest(unittest.TestCase):
         ):
             self.assertTrue((ROOT / script).is_file())
 
+    def test_every_package_ships_the_kwin_effect_sources(self):
+        """The placement backend has to reach packaged installs.
+
+        The effect links against the KWin of the machine that builds it, so the
+        recipes ship its sources plus the optional builder rather than a binary
+        that could be rejected by a different compositor version.
+        """
+        for recipe in (
+            "packaging/debian/rules",
+            "packaging/rpm/textpik.spec",
+            "packaging/arch/PKGBUILD",
+        ):
+            with self.subTest(recipe=recipe):
+                text = (ROOT / recipe).read_text(encoding="utf-8")
+                self.assertIn("native", text, "recipe no distribuye native/")
+                self.assertIn(
+                    "kwin-effect/build.sh",
+                    text,
+                    "recipe no construye el efecto KWin",
+                )
+
+    def test_wheel_ships_the_kwin_effect_sources(self):
+        text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn("native/kwin-effect/effect.cpp", text)
+        self.assertIn("native/kwin-effect/CMakeLists.txt", text)
+        self.assertIn("packaging/kwin-effect/build.sh", text)
+
+    def test_the_effect_builder_degrades_instead_of_failing(self):
+        """A package build without the KWin toolchain must still succeed."""
+        script = (ROOT / "packaging/kwin-effect/build.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("missing", script)
+        self.assertIn("exit 0", script)
+
+    def test_native_ci_job_compiles_and_verifies_the_effect(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("kwin-effect", workflow)
+        self.assertIn("textpik-verify-effect", workflow)
+
     def test_appstream_metadata_is_valid_xml(self):
         root = ET.parse(
             ROOT / "packaging/io.github.pitydah.textpik.metainfo.xml"

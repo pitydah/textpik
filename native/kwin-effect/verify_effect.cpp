@@ -72,13 +72,24 @@ int main(int argc, char **argv)
     const QString path = QString::fromLocal8Bit(argv[1]);
 
     QPluginLoader loader(path);
+    const QJsonObject root = loader.metaData();
     // QPluginLoader nests the plugin's own JSON under "MetaData".
-    const QJsonObject meta = loader.metaData().value("MetaData").toObject();
+    const QJsonObject meta = root.value("MetaData").toObject();
     if (meta.isEmpty()) {
         std::fprintf(stderr, "FALLA: sin metadata de plugin: %s\n",
                      qPrintable(loader.errorString()));
         return 1;
     }
+
+    // The plugin interface changes with KWin's version. The IID must be the one
+    // the headers this plugin was compiled against declare, otherwise KWin will
+    // refuse to load it even though everything else is correct.
+    const QString declaredIid = root.value("IID").toString();
+    const QString expectedIid = QStringLiteral(EffectPluginFactory_iid);
+    std::printf("IID declarado    : %s\n", qPrintable(declaredIid));
+    std::printf("IID esperado     : %s\n", qPrintable(expectedIid));
+    check(declaredIid == expectedIid,
+          "el IID del plugin coincide con este KWin");
 
     const QJsonObject plugin = meta.value("KPlugin").toObject();
     const QString id = plugin.value("Id").toString();

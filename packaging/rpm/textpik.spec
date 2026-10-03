@@ -27,7 +27,14 @@ install -Dm644 packaging/textpik.desktop %{buildroot}%{_datadir}/applications/te
 install -Dm644 assets/app/textpik.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/textpik.svg
 install -Dm644 packaging/io.github.pitydah.textpik.metainfo.xml %{buildroot}%{_metainfodir}/io.github.pitydah.textpik.metainfo.xml
 mkdir -p %{buildroot}%{_datadir}/textpik
-cp -a assets kwin %{buildroot}%{_datadir}/textpik/
+cp -a assets kwin native %{buildroot}%{_datadir}/textpik/
+# The KWin placement effect is the backend that makes the popup follow the
+# cursor on Plasma Wayland. It is built when the KWin and KF6 development files
+# are present and skipped with a message otherwise, so the package still builds
+# and still ships the sources. RPM cannot own the Qt plugin path conditionally,
+# so the built plugin lands in the package data directory and the per-user
+# setup installs it into the session plugin path.
+packaging/kwin-effect/build.sh %{buildroot}%{_datadir}/textpik/kwin-effect
 
 %files -f %{pyproject_files}
 %license LICENSE

@@ -39,6 +39,17 @@ include = ["textpik_core*"]
 "share/textpik/assets/tray" = ["assets/tray/*.svg"]
 "share/textpik/kwin/textpik-cursor-bridge" = ["kwin/textpik-cursor-bridge/metadata.json"]
 "share/textpik/kwin/textpik-cursor-bridge/contents/code" = ["kwin/textpik-cursor-bridge/contents/code/main.js"]
+# The KWin placement effect is delivered as sources: it links against the KWin
+# of the machine that builds it, so a wheel cannot ship a usable binary. These
+# entries let a packaged install compile it against the local KWin.
+"share/textpik/native/kwin-effect" = [
+    "native/kwin-effect/CMakeLists.txt",
+    "native/kwin-effect/effect.cpp",
+    "native/kwin-effect/effect.h",
+    "native/kwin-effect/metadata.json",
+    "native/kwin-effect/verify_effect.cpp",
+]
+"share/textpik/packaging/kwin-effect" = ["packaging/kwin-effect/build.sh"]
 "share/applications" = ["packaging/textpik.desktop"]
 "share/icons/hicolor/scalable/apps" = ["assets/app/textpik.svg"]
 "share/metainfo" = ["packaging/io.github.pitydah.textpik.metainfo.xml"]
