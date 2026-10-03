@@ -29,6 +29,15 @@ Popup placement scores at most five candidates. It heavily penalizes covering
 the selection or cursor, then considers edge clamping and distance. This keeps
 placement stable and constant-time near monitor edges.
 
+Popup identity is the pair (signature, generation). The signature describes what
+is shown, and the generation is the session that asked for it. Both are required:
+re-selecting the same text produces an identical signature, and without the
+generation the duplicate guard would discard a selection the user really made
+and leave the popup anchored where the previous cursor was. For the same reason
+an AT-SPI payload only enriches a visible popup when it does not contradict the
+selection that popup already represents; a differing text, or the same text
+in another place, is a new selection and claims its own generation.
+
 `textpik_core.interaction` owns modifier resolution and bounded one/two-row
 composition. `textpik_core.utilities` contains dependency-free local actions,
 while `textpik_core.health` persists only process metadata required to detect an

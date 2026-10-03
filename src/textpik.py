@@ -6119,17 +6119,50 @@ class TextPikApp(QObject):
             return
 
         text = context.text.strip()
+        previous_context = self.selection_context
         self.selection_context = context
         self.monitor._last_text = text
 
-        # If clipboard already owns this same session, enrich its immutable
-        # action target instead of spawning a competing generation.
-        if base_session > 0 and self.popup.isVisible():
+        # Enrich only when AT-SPI is describing the selection the visible popup
+        # already represents. A payload that contradicts it is a new selection
+        # and must claim its own generation so the popup re-anchors and the
+        # placement runs again instead of leaving the popup over the old text.
+        if (
+            base_session > 0
+            and self.popup.isVisible()
+            and self._describes_same_selection(previous_context, context)
+        ):
             self.popup.set_context(context)
             return
 
         session_id = self._begin_selection_session("atspi-confirmed")
         self.show_popup(context=context, session_id=session_id)
+
+    @staticmethod
+    def _describes_same_selection(current, candidate) -> bool:
+        """Whether an AT-SPI payload still describes the current selection.
+
+        Enrichment exists so a clipboard selection can gain the metadata only
+        AT-SPI exposes (range, rectangle, native handle), so a field the
+        clipboard context lacks must not block it. The text has to match,
+        because the popup's actions were planned for it. The rectangle has to
+        agree when both sides carry one, because that is where the selection
+        is: the same text somewhere else is a new selection.
+
+        Application and role are deliberately not compared. They are reported
+        by different sources that name the same window inconsistently, so
+        treating a mismatch as a new selection would re-show the popup for the
+        selection it is already presenting.
+        """
+        if current is None or candidate is None:
+            return False
+        if (current.text or "").strip() != (candidate.text or "").strip():
+            return False
+        current_rect = getattr(current, "selection_rect", None)
+        candidate_rect = getattr(candidate, "selection_rect", None)
+        if current_rect and candidate_rect and current_rect != candidate_rect:
+            return False
+        return True
 
     def hotkey_triggered(self):
         if self.popup.isVisible():
@@ -6692,7 +6725,11 @@ class TextPikApp(QObject):
             ):
                 logger.debug("Popup duplicado ignorado")
                 return
-            if not force and not self.popup_state.begin(signature):
+            # The generation is the session that asked for this popup: the same
+            # text selected again is a new gesture and must re-anchor.
+            if not force and not self.popup_state.begin(
+                signature, generation=session_id
+            ):
                 logger.debug("Transicion duplicada de popup ignorada")
                 return
             logger.info("Mostrando popup para seleccion de %d caracteres", len(text))
