@@ -53,6 +53,15 @@ class PlacementTransport(Protocol):
         """Return ``(ok, arguments)``; ``ok`` is false on any D-Bus error."""
         ...
 
+    def call_async(self, method: str, *args: Any, on_done) -> None:
+        """Run the call without blocking and hand the result to ``on_done``.
+
+        ``on_done`` receives ``(ok, arguments)``.  The call must never block the
+        caller: this is the variant the popup hot path uses, because a stalled
+        compositor would otherwise freeze the interface for the timeout.
+        """
+        ...
+
 
 class QtDBusPlacementTransport:
     """QtDBus-backed transport against the placement effect."""
@@ -60,6 +69,9 @@ class QtDBusPlacementTransport:
     def __init__(self, timeout_ms: int = CALL_TIMEOUT_MS) -> None:
         self._timeout_ms = timeout_ms
         self._interface: Any = None
+        # QDBusPendingCallWatcher is owned by Python: without a live reference
+        # the watcher is collected before it can deliver its reply.
+        self._watchers: set[Any] = set()
         self.error = ""
 
     def _iface(self):
@@ -100,9 +112,59 @@ class QtDBusPlacementTransport:
             return False, []
         return True, list(reply.arguments())
 
+    def call_async(self, method: str, *args: Any, on_done) -> None:
+        """Issue the call and return immediately.
+
+        A reply that never arrives cannot strand the caller: QtDBus delivers a
+        timeout error for the asynchronous call too, and the popup keeps its own
+        reveal deadline as a second guarantee.
+        """
+        try:
+            from PySide6.QtDBus import QDBusMessage, QDBusPendingCallWatcher
+
+            interface = self._iface()
+        except Exception as exc:  # pragma: no cover - depends on Qt install
+            self.error = f"qtdbus-unavailable: {exc}"
+            on_done(False, [])
+            return
+
+        if not interface.isValid():
+            self.error = "placement-service-unavailable"
+            on_done(False, [])
+            return
+
+        try:
+            pending = interface.asyncCall(method, *args)
+        except Exception as exc:  # pragma: no cover - depends on the bus
+            self.error = f"call-failed: {exc}"
+            on_done(False, [])
+            return
+
+        watcher = QDBusPendingCallWatcher(pending)
+        self._watchers.add(watcher)
+
+        def _finished(finished):
+            self._watchers.discard(watcher)
+            reply = finished.reply()
+            if reply.type() == QDBusMessage.MessageType.ErrorMessage:
+                self.error = str(reply.errorMessage() or "dbus-error")
+                on_done(False, [])
+            else:
+                on_done(True, list(reply.arguments()))
+            finished.deleteLater()
+
+        watcher.finished.connect(_finished)
+
 
 class KWinPlacementClient:
-    """Reads and drives the placement authority exposed by the KWin effect."""
+    """Reads and drives the placement authority exposed by the KWin effect.
+
+    Two shapes are available on purpose.  The popup hot path uses the
+    asynchronous calls, because a stalled compositor must not freeze the
+    interface.  The blocking variants remain for the availability probe, which
+    decides the cloak before the popup is shown and has to answer immediately,
+    and for tooling that runs outside the event loop.
+    """
 
     def __init__(self, transport: PlacementTransport | None = None) -> None:
         self._transport = (
@@ -157,6 +219,42 @@ class KWinPlacementClient:
         if not ok or not arguments:
             return None
         return self.parse(str(arguments[0]), expected_revision=int(revision))
+
+    def request_async(
+        self,
+        revision: int,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        on_done,
+    ) -> None:
+        """Ask the compositor to place the popup, without blocking.
+
+        ``on_done(ok)`` runs later on the event loop, so the caller keeps
+        ownership of its deadlines: a slow compositor must not freeze the popup.
+        """
+        self._transport.call_async(
+            "requestPlacement",
+            int(revision),
+            int(x),
+            int(y),
+            int(width),
+            int(height),
+            on_done=lambda ok, _arguments: on_done(ok),
+        )
+
+    def readback_async(self, revision: int, on_done) -> None:
+        """Read the placement back without blocking; ``on_done`` gets the result."""
+        expected = int(revision)
+
+        def _parsed(ok, arguments):
+            if not ok or not arguments:
+                on_done(None)
+                return
+            on_done(self.parse(str(arguments[0]), expected_revision=expected))
+
+        self._transport.call_async("readback", on_done=_parsed)
 
     @staticmethod
     def parse(payload: str, *, expected_revision: int) -> PlacementConfirmation | None:

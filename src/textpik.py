@@ -401,6 +401,11 @@ PLACEMENT_PROBE_TTL = 2.0
 # so an unconfirmed placement is retried a few times before giving up.
 PLACEMENT_CONFIRM_ATTEMPTS = 8
 PLACEMENT_CONFIRM_INTERVAL_MS = 20
+# The placement calls no longer block, so the D-Bus timeout alone no longer
+# bounds the worst case: a reply that never arrives would leave the popup
+# cloaked. This is the hard deadline after which the popup is revealed
+# degraded, whatever the compositor is doing.
+PLACEMENT_REVEAL_DEADLINE_MS = 450
 
 GITHUB_PROFILE_URL = "https://github.com/pitydah"
 GITHUB_SPONSORS_URL = "https://github.com/sponsors/pitydah"
@@ -2306,11 +2311,15 @@ class PopupWindow(QWidget):
         self._placement_effect_available = False
         self._placement_lease = PresentationLease()
         self._placement_attempt = 0
+        self._placement_pending = None
         self.last_placement_result = None
         self._placement_opacity_effect = QGraphicsOpacityEffect(self)
         self._placement_opacity_effect.setOpacity(1.0)
         self.setGraphicsEffect(self._placement_opacity_effect)
         self._placement_hidden_for_authority = False
+        self._placement_reveal_timer = QTimer(self)
+        self._placement_reveal_timer.setSingleShot(True)
+        self._placement_reveal_timer.timeout.connect(self._reveal_placement_deadline)
         self.keyboard_mode = False
         self.palette = ActionPalette(self)
         self.palette.action_triggered.connect(self._on_click)
@@ -2693,6 +2702,30 @@ class PopupWindow(QWidget):
         self._placement_hidden_for_authority = not revealed
         self._placement_opacity_effect.setOpacity(1.0 if revealed else 0.0)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, not revealed)
+        if revealed:
+            self._placement_reveal_timer.stop()
+
+    def _reveal_placement_deadline(self):
+        """Guarantee the popup is never left invisible waiting for a reply.
+
+        The deadline also records the outcome, because a reply that never
+        arrives means the retry ladder never ran: without this the diagnostic
+        would have no placement result at all instead of a degraded one.
+        """
+        if not self._placement_hidden_for_authority:
+            return
+        logger.warning(
+            "Popup placement: sin confirmacion del compositor en %sms; se revela degradado",
+            PLACEMENT_REVEAL_DEADLINE_MS,
+        )
+        pending = self._placement_pending
+        if pending is not None and self._placement_request_is_current(pending[4]):
+            desired, requested, width, height, revision = pending
+            self._store_placement_result(
+                desired, requested, width, height, revision, None, "effect-timeout"
+            )
+            return
+        self._set_placement_revealed(True)
 
     def set_keyboard_mode(self, enabled):
         enabled = bool(enabled)
@@ -2726,6 +2759,7 @@ class PopupWindow(QWidget):
         # A hidden popup has no current request, so any confirmation still in
         # flight must be dropped instead of mutating the placement state.
         self._placement_lease.release()
+        self._placement_pending = None
         self._set_placement_revealed(True)
         self.dismissed.emit()
         super().hideEvent(event)
@@ -2903,6 +2937,10 @@ class PopupWindow(QWidget):
             and choice.backend == PlacementBackend.KWIN_EFFECT
         )
         self._set_placement_revealed(not cloak_for_compositor)
+        if cloak_for_compositor:
+            # Asynchronous replies can be lost, so the cloak always has an owner
+            # that reveals it even if nothing ever answers.
+            self._placement_reveal_timer.start(PLACEMENT_REVEAL_DEADLINE_MS)
 
         # Mapping must happen before the compositor can know the Wayland
         # surface. The KWin Effect queues an early request until windowAdded,
@@ -2987,15 +3025,36 @@ class PopupWindow(QWidget):
         )
 
     def _start_kwin_placement(self, desired, requested, width, height):
+        """Ask the compositor to place the popup, without blocking the interface.
+
+        Every step runs on the event loop so a stalled compositor cannot freeze
+        the popup: the caller's own deadline owns the worst case instead of a
+        blocking D-Bus timeout.
+        """
         revision = self._placement_lease.begin()
+        self._placement_attempt = 0
+        self._placement_pending = (desired, requested, width, height, revision)
         client = self._placement_client
-        sent = bool(
-            client
-            and client.request(
-                revision, requested.x, requested.y, width, height
+        if client is None:
+            self._store_placement_result(
+                desired, requested, width, height, revision, None, "effect-unreachable"
             )
+            return
+        client.request_async(
+            revision,
+            requested.x,
+            requested.y,
+            width,
+            height,
+            on_done=lambda ok: self._on_placement_requested(
+                revision, ok, desired, requested, width, height
+            ),
         )
-        if not sent:
+
+    def _on_placement_requested(self, revision, ok, desired, requested, width, height):
+        if not self._placement_request_is_current(revision):
+            return
+        if not ok:
             self._store_placement_result(
                 desired, requested, width, height, revision, None, "effect-unreachable"
             )
@@ -3004,25 +3063,31 @@ class PopupWindow(QWidget):
                 revision,
             )
             return
-        self._placement_attempt = 0
-        self._await_placement_confirmation(revision, desired, requested, width, height)
+        self._read_placement_confirmation(revision, desired, requested, width, height)
 
-    def _await_placement_confirmation(self, revision, desired, requested, width, height):
-        """Read the compositor geometry, retrying while the popup is mapping.
+    def _read_placement_confirmation(self, revision, desired, requested, width, height):
+        client = self._placement_client
+        if client is None or not self._placement_request_is_current(revision):
+            return
+        client.readback_async(
+            revision,
+            on_done=lambda confirmation: self._on_placement_readback(
+                revision, confirmation, desired, requested, width, height
+            ),
+        )
+
+    def _on_placement_readback(
+        self, revision, confirmation, desired, requested, width, height
+    ):
+        """Retry while the compositor settles, then report whatever it showed.
 
         A surface that was just shown may reach KWin one event-loop turn later,
-        so an unconfirmed revision is retried a bounded number of times instead
-        of reporting a failure the compositor never had a chance to answer.
+        so a revision that does not match yet is retried instead of reporting a
+        failure the compositor never had a chance to answer.
         """
-        client = self._placement_client
-        confirmation = client.readback(revision) if client else None
-        matches = bool(
-            confirmation
-            and abs(confirmation.position.x - requested.x) <= 2
-            and abs(confirmation.position.y - requested.y) <= 2
-            and abs(confirmation.size[0] - width) <= 2
-            and abs(confirmation.size[1] - height) <= 2
-        )
+        if not self._placement_request_is_current(revision):
+            return
+        matches = self._placement_matches(confirmation, requested, width, height)
         if (
             not matches
             and self._placement_hidden_for_authority
@@ -3031,11 +3096,14 @@ class PopupWindow(QWidget):
             self._placement_attempt += 1
             QTimer.singleShot(
                 PLACEMENT_CONFIRM_INTERVAL_MS,
-                lambda: self._retry_placement_confirmation(
+                lambda: self._read_placement_confirmation(
                     revision, desired, requested, width, height
                 ),
             )
             return
+        # A confirmation that arrived but disagrees is still reported: the model
+        # turns it into position-mismatch or size-mismatch, which says more than
+        # a timeout would.
         self._store_placement_result(
             desired,
             requested,
@@ -3046,10 +3114,20 @@ class PopupWindow(QWidget):
             None if confirmation is not None else "effect-timeout",
         )
 
-    def _retry_placement_confirmation(self, revision, desired, requested, width, height):
-        if not self.isVisible() or self._placement_lease.active_revision != revision:
-            return
-        self._await_placement_confirmation(revision, desired, requested, width, height)
+    def _placement_request_is_current(self, revision):
+        return bool(
+            self.isVisible() and self._placement_lease.active_revision == revision
+        )
+
+    @staticmethod
+    def _placement_matches(confirmation, requested, width, height):
+        return bool(
+            confirmation
+            and abs(confirmation.position.x - requested.x) <= 2
+            and abs(confirmation.position.y - requested.y) <= 2
+            and abs(confirmation.size[0] - width) <= 2
+            and abs(confirmation.size[1] - height) <= 2
+        )
 
     def _store_placement_result(
         self, desired, requested, width, height, revision, confirmation, error
@@ -3068,6 +3146,7 @@ class PopupWindow(QWidget):
             error=error,
         )
         self.last_placement_result = result
+        self._placement_pending = None
         self._set_placement_revealed(True)
         logger.info(
             "Popup placement backend=%s outcome=%s verified=%s revision=%s"

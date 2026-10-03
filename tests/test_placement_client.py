@@ -20,25 +20,38 @@ from src.textpik_core.placement_client import (
 
 
 class FakeTransport:
-    """Records calls and replays scripted replies."""
+    """Records calls and replays scripted replies.
+
+    Blocking and asynchronous calls are recorded separately so a test can prove
+    which one a code path used.
+    """
 
     def __init__(self, replies=None):
         self.calls = []
+        self.async_calls = []
         self.replies = dict(replies or {})
         self.error = ""
 
-    def call(self, method, *args):
-        self.calls.append((method, args))
+    def _reply_for(self, method):
         reply = self.replies.get(method, (True, []))
-        if callable(reply):
-            return reply(args)
         if isinstance(reply, Exception):
             self.error = str(reply)
             return False, []
         return reply
 
+    def call(self, method, *args):
+        self.calls.append((method, args))
+        return self._reply_for(method)
+
+    def call_async(self, method, *args, on_done):
+        self.async_calls.append((method, args))
+        on_done(*self._reply_for(method))
+
     def methods(self):
         return [name for name, _ in self.calls]
+
+    def async_methods(self):
+        return [name for name, _ in self.async_calls]
 
 
 class ContractTest(unittest.TestCase):
@@ -94,6 +107,137 @@ class RequestsTest(unittest.TestCase):
         transport = FakeTransport({"unregisterTextPikWindow": (True, [])})
         self.assertTrue(KWinPlacementClient(transport).unregister_window())
         self.assertEqual(transport.methods(), ["unregisterTextPikWindow"])
+
+
+class AsyncPlacementTest(unittest.TestCase):
+    """Placement calls must not block the interface thread.
+
+    A blocking call holds the caller for the D-Bus timeout, and the popup
+    retries, so a stalled compositor used to freeze the interface for up to a
+    second. These pin that the placement path goes through the asynchronous
+    transport and that the blocking one stays for probes only.
+    """
+
+    def test_request_uses_the_async_transport(self):
+        transport = FakeTransport({"requestPlacement": (True, [])})
+        results = []
+        KWinPlacementClient(transport).request_async(
+            41, 1440, 720, 320, 90, on_done=results.append
+        )
+        self.assertEqual(results, [True])
+        self.assertEqual(transport.async_methods(), ["requestPlacement"])
+        self.assertEqual(transport.calls, [], "no debe usar la llamada bloqueante")
+
+    def test_request_async_reports_failure(self):
+        transport = FakeTransport({"requestPlacement": RuntimeError("stalled")})
+        results = []
+        KWinPlacementClient(transport).request_async(
+            1, 0, 0, 10, 10, on_done=results.append
+        )
+        self.assertEqual(results, [False])
+
+    def test_readback_async_uses_the_async_transport(self):
+        transport = FakeTransport({"readback": (True, ["41,1,1440,720,320,90,DP-2"])})
+        results = []
+        KWinPlacementClient(transport).readback_async(41, on_done=results.append)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].position.as_tuple(), (1440, 720))
+        self.assertEqual(transport.async_methods(), ["readback"])
+        self.assertEqual(transport.calls, [])
+
+    def test_readback_async_rejects_a_superseded_revision(self):
+        transport = FakeTransport({"readback": (True, ["42,1,1,2,3,4,DP-2"])})
+        results = []
+        KWinPlacementClient(transport).readback_async(41, on_done=results.append)
+        self.assertEqual(results, [None])
+
+    def test_readback_async_reports_none_on_transport_failure(self):
+        transport = FakeTransport({"readback": RuntimeError("down")})
+        results = []
+        KWinPlacementClient(transport).readback_async(7, on_done=results.append)
+        self.assertEqual(results, [None])
+
+    def test_the_probe_still_answers_synchronously(self):
+        """The backend choice decides the cloak before the popup is shown."""
+        transport = FakeTransport({"readback": (True, ["7,0,0,0,0,0,"])})
+        self.assertTrue(KWinPlacementClient(transport).available())
+        self.assertEqual(transport.async_calls, [])
+
+
+class QtDBusAsyncTransportTest(unittest.TestCase):
+    """The real transport must defer its reply instead of blocking the caller.
+
+    The service is registered for the duration of the test on purpose. Without
+    an owner the interface is invalid and the transport answers from its early
+    return, which would pass a timing assertion without ever exercising the
+    asynchronous path.
+    """
+
+    def setUp(self):
+        try:
+            from PySide6.QtCore import QObject
+            from PySide6.QtDBus import QDBusConnection
+        except ImportError:  # pragma: no cover - depends on Qt install
+            self.skipTest("QtDBus no disponible")
+
+        self.bus = QDBusConnection.sessionBus()
+        if not self.bus.isConnected():
+            self.skipTest("sin bus de sesion")
+
+        self.owned_service = bool(self.bus.registerService(SERVICE_NAME))
+        self.holder = QObject()
+        self.bus.registerObject(
+            OBJECT_PATH, self.holder, QDBusConnection.ExportAllSlots
+        )
+
+    def tearDown(self):
+        if getattr(self, "holder", None) is not None:
+            self.bus.unregisterObject(OBJECT_PATH)
+            self.holder = None
+        if getattr(self, "owned_service", False):
+            self.bus.unregisterService(SERVICE_NAME)
+
+    def test_async_call_defers_the_reply_instead_of_blocking(self):
+        from time import monotonic
+
+        from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+
+        from src.textpik_core.placement_client import QtDBusPlacementTransport
+
+        app = QCoreApplication.instance() or QCoreApplication([])
+        transport = QtDBusPlacementTransport(timeout_ms=200)
+        delivered = []
+
+        started = monotonic()
+        transport.call_async(
+            "readback", on_done=lambda ok, args: delivered.append(ok)
+        )
+        elapsed_ms = (monotonic() - started) * 1000
+
+        self.assertLess(
+            elapsed_ms,
+            50,
+            "call_async bloqueo al llamador en lugar de diferir la respuesta",
+        )
+        self.assertEqual(
+            delivered,
+            [],
+            "el callback llego sin ceder el event loop: la llamada fue sincrona",
+        )
+
+        loop = QEventLoop()
+        deadline = QTimer()
+        deadline.setSingleShot(True)
+        deadline.timeout.connect(loop.quit)
+        deadline.start(2000)
+        poll = QTimer()
+        poll.timeout.connect(lambda: loop.quit() if delivered else None)
+        poll.start(20)
+        loop.exec()
+
+        self.assertTrue(delivered, "el callback asincrono nunca llego")
+        self.assertIsInstance(delivered[0], bool)
+        self.assertIsNotNone(app)
 
 
 class ReadbackTest(unittest.TestCase):

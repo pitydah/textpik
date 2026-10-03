@@ -17,6 +17,7 @@ from src.textpik import (
     DEFAULT_ACTIONS,
     DEFAULT_SETTINGS,
     PLACEMENT_PROBE_TTL,
+    PLACEMENT_REVEAL_DEADLINE_MS,
     PopupWindow,
 )
 from src.textpik_core.models import PlacementBackend, Point
@@ -37,6 +38,11 @@ class FakeTransport:
             self.error = str(reply)
             return False, []
         return reply
+
+    def call_async(self, method, *args, on_done):
+        """Deliver immediately so the popup flow keeps its shape in tests."""
+        ok, arguments = self.call(method, *args)
+        on_done(ok, arguments)
 
 
 class PopupPlacementTest(unittest.TestCase):
@@ -222,6 +228,52 @@ class PopupPlacementTest(unittest.TestCase):
         result = popup.last_placement_result
         self.assertTrue(result.verified, f"backend no reconocido: {result.error}")
         self.assertEqual(result.observed.as_tuple(), (700, 460))
+        popup.hide()
+
+    def test_a_lost_reply_never_leaves_the_popup_invisible(self):
+        """Asynchronous replies can be lost; the cloak must still lift.
+
+        With blocking calls the D-Bus timeout guaranteed progress. Now that the
+        placement calls return immediately, a reply that never arrives would
+        leave the popup cloaked forever without its own deadline.
+        """
+        from PySide6.QtCore import QEventLoop, QTimer
+
+        class SilentTransport:
+            error = ""
+
+            def call(self, method, *args):
+                return False, []
+
+            def call_async(self, method, *args, on_done):
+                return None  # la respuesta nunca llega
+
+        popup = self.make_popup()
+        popup._placement_client = KWinPlacementClient(SilentTransport())
+        self.force_backend(popup, PlacementBackend.KWIN_EFFECT, authoritative=True)
+
+        # The real path: show_at_cursor decides to cloak and owns the deadline.
+        popup.show_at_cursor()
+        self.assertTrue(
+            popup._placement_hidden_for_authority,
+            "el popup deberia estar oculto esperando al compositor",
+        )
+
+        loop = QEventLoop()
+        QTimer.singleShot(PLACEMENT_REVEAL_DEADLINE_MS + 120, loop.quit)
+        loop.exec()
+
+        self.assertFalse(
+            popup._placement_hidden_for_authority,
+            "el popup quedo invisible esperando una respuesta que nunca llego",
+        )
+        # A lost reply skips the retry ladder, so the deadline is the only place
+        # that can leave the diagnostic with an honest answer.
+        result = popup.last_placement_result
+        self.assertIsNotNone(result, "el diagnostico quedo sin resultado")
+        self.assertFalse(result.verified)
+        self.assertEqual(result.error, "effect-timeout")
+        self.assertIsNone(result.observed)
         popup.hide()
 
     def test_late_confirmation_for_a_newer_selection_is_dropped(self):
